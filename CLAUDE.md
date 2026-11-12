@@ -8,7 +8,7 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
 - APK : GitHub Actions (`.github/workflows/android.yml`) → `expo prebuild` + `gradlew assembleRelease` (signé avec la clé debug du modèle),
   publié dans la Release `android` (NetCheck.apk). Pas d'Expo/EAS, pas de mise à jour OTA : chaque modif = nouvel APK à réinstaller.
 - PC : GitHub Pages (`.github/workflows/web.yml`), `experiments.baseUrl` = `/NetCheck`.
-- Je ne vois pas les GitHub Actions depuis ma session : demander à Etienne l'onglet Actions en cas de doute.
+- Je peux suivre les GitHub Actions de ce dépôt avec `gh run list / gh run view` et lire les Releases via `gh api` (REST ; GraphQL bloqué).
 
 ## Vérifs avant push
 - `npx tsc --noEmit`
