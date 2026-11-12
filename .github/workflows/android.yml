@@ -1,0 +1,58 @@
+# Fabrique l'APK Android à chaque modification et le met en téléchargement
+# (onglet « Releases » du dépôt → « NetCheck pour Android » → NetCheck.apk).
+# Tout se fait sur les ordinateurs gratuits de GitHub, sans Expo.
+name: APK Android
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Dépendances
+        run: npm ci
+
+      - name: Projet Android
+        run: |
+          npx expo prebuild --platform android --no-install
+          # Numéro de version qui augmente à chaque compilation (mise à jour par-dessus l'ancienne)
+          sed -i "s/versionCode 1$/versionCode ${{ github.run_number }}/" android/app/build.gradle
+
+      - name: Compilation
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      - name: Mise en ligne de l'APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk NetCheck.apk
+          gh release delete android --yes --cleanup-tag || true
+          gh release create android NetCheck.apk \
+            --title "NetCheck pour Android" \
+            --target "${{ github.sha }}" \
+            --notes "Version n°${{ github.run_number }} — télécharge NetCheck.apk sur le téléphone puis ouvre-le pour l'installer (autoriser l'installation depuis le navigateur si Android le demande)."

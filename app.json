@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "NetCheck",
+    "slug": "netcheck",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0F1A",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B0F1A"
+    },
+    "android": {
+      "package": "com.soulieze.netcheck",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0F1A",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "name": "NetCheck",
+      "shortName": "NetCheck",
+      "favicon": "./assets/favicon.png",
+      "backgroundColor": "#0B0F1A",
+      "themeColor": "#0B0F1A",
+      "output": "single"
+    },
+    "experiments": {
+      "baseUrl": "/NetCheck"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
+  }
+}
