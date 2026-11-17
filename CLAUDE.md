@@ -25,3 +25,4 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
   réactivité box/internet, lecture des pages 192.168.0.1 et 192.168.100.1 (modèle, signal si lisible sans mot de passe).
   Connexion à la box avec mot de passe : pas encore faite, dépend du modèle.
 - Web : sondes en `no-cors`, horloge dans un Web Worker (pas ralentie en arrière-plan), box non testable.
+  Débit descendant PC = `webDownloadMbps` (6 flux, 8 s, octets réellement reçus). L’'ancienne méthode (Resource Timing / no-cors) donnait 0,8 Mb/s au lieu de 166.

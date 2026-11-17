@@ -44,25 +44,11 @@ export async function probe(url: string, timeoutMs = 2000): Promise<number | nul
 
 // ---------------- Test de débit ----------------
 
-/** Téléchargement de `bytes` octets, renvoie la durée en ms */
+/** Téléphone : téléchargement de `bytes` octets dans un fichier temporaire, renvoie la durée en ms */
 async function downloadOnce(bytes: number): Promise<number> {
   const url = bust(`${SPEED_HOST}/__down?bytes=${Math.round(bytes)}`);
   const t0 = Date.now();
-  if (IS_WEB) {
-    try {
-      // Si Cloudflare autorise la lecture (CORS) : on lit tout le flux
-      const res = await fetch(url, { cache: 'no-store' });
-      const reader = res.body!.getReader();
-      while (!(await reader.read()).done) {}
-      return Date.now() - t0;
-    } catch {
-      // Sinon : téléchargement « opaque », on lit sa durée dans les mesures du navigateur
-      await fetch(url, { mode: 'no-cors', cache: 'no-store' });
-      const end = await waitResourceEnd(url, 120000);
-      return end ?? Date.now() - t0;
-    }
-  }
-  // Téléphone : téléchargement natif dans un fichier temporaire (plus juste qu'en JavaScript)
+  // Téléchargement natif (plus juste qu'en JavaScript)
   const { File, Paths } = require('expo-file-system') as typeof import('expo-file-system');
   const file = new File(Paths.cache, `speed_${Date.now()}_${seq++}.bin`);
   try {
@@ -75,18 +61,46 @@ async function downloadOnce(bytes: number): Promise<number> {
   }
 }
 
-/** Navigateur : durée réelle d'un téléchargement (fin de réception), via Resource Timing */
-function waitResourceEnd(url: string, timeoutMs: number): Promise<number | null> {
-  return new Promise((resolve) => {
-    const started = Date.now();
-    const look = () => {
-      const e = performance.getEntriesByName(url).pop() as PerformanceResourceTiming | undefined;
-      if (e && e.responseEnd > 0) return resolve(e.responseEnd - e.startTime);
-      if (Date.now() - started > timeoutMs) return resolve(null);
-      setTimeout(look, 100);
-    };
-    look();
-  });
+/**
+ * PC (navigateur) : débit descendant en Mb/s, comme fast.com.
+ * Plusieurs flux téléchargent en continu pendant 8 s ; on compte les octets vraiment reçus,
+ * en ignorant la 1re seconde et demie (montée en vitesse). Ne dépend ni de la taille demandée
+ * ni des mesures internes du navigateur (l'ancienne méthode donnait 0,8 Mb/s au lieu de 166).
+ */
+async function webDownloadMbps(): Promise<number> {
+  const STREAMS = 6;
+  const DURATION = 8000;
+  const WARMUP = 1500;
+  const CHUNK = 25e6;
+  const ctrl = new AbortController();
+  const t0 = performance.now();
+  let counted = 0;
+  const errors: string[] = [];
+  const stream = async () => {
+    while (!ctrl.signal.aborted) {
+      const res = await fetch(bust(`${SPEED_HOST}/__down?bytes=${CHUNK}`), { cache: 'no-store', signal: ctrl.signal });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && performance.now() - t0 >= WARMUP) counted += value.byteLength;
+      }
+    }
+  };
+  const tasks = Array.from({ length: STREAMS }, () =>
+    stream().catch((e) => {
+      if (!ctrl.signal.aborted) errors.push(e?.message ?? String(e));
+    })
+  );
+  await new Promise((r) => setTimeout(r, DURATION));
+  const elapsed = performance.now() - t0 - WARMUP;
+  ctrl.abort();
+  await Promise.all(tasks);
+  if (errors.length >= STREAMS || counted === 0) {
+    throw new Error(`Test descendant impossible${errors[0] ? ` (${errors[0]})` : ''}`);
+  }
+  return mbps(counted, elapsed);
 }
 
 async function uploadOnce(bytes: number): Promise<number> {
@@ -122,16 +136,10 @@ export type SpeedResult = { down: number | null; up: number | null; ping: number
  */
 export async function speedTest(onStep?: (s: string) => void): Promise<SpeedResult> {
   const out: SpeedResult = { down: null, up: null, ping: null };
-  if (IS_WEB) {
-    // Le navigateur garde un nombre limité de mesures : on fait de la place pour celles du test
-    try {
-      performance.setResourceTimingBufferSize(2000);
-      performance.clearResourceTimings();
-    } catch {}
-  }
   try {
     onStep?.('Temps de réponse…');
     const pings: number[] = [];
+    await probe(TARGETS.cloudflare, 3000); // 1er essai = ouverture de la connexion, pas compté
     for (let i = 0; i < 6; i++) {
       const p = await probe(TARGETS.cloudflare, 3000);
       if (p != null) pings.push(p);
@@ -140,11 +148,15 @@ export async function speedTest(onStep?: (s: string) => void): Promise<SpeedResu
     out.ping = pings.length ? pings[Math.floor(pings.length / 2)] : null;
 
     onStep?.('Débit descendant…');
-    // Essai : 2 Mo, pour estimer
-    const est = mbps(2e6, await downloadOnce(2e6));
-    const streams = 4;
-    const target = Math.min(Math.max((est * 1e6 * 4) / 8 / streams, 2e6), 125e6); // ~4 s, max 500 Mo au total
-    out.down = Math.round((await parallel(downloadOnce, streams, target)) * 10) / 10;
+    if (IS_WEB) {
+      out.down = Math.round((await webDownloadMbps()) * 10) / 10;
+    } else {
+      // Essai : 2 Mo, pour estimer
+      const est = mbps(2e6, await downloadOnce(2e6));
+      const streams = 4;
+      const target = Math.min(Math.max((est * 1e6 * 4) / 8 / streams, 2e6), 125e6); // ~4 s, max 500 Mo au total
+      out.down = Math.round((await parallel(downloadOnce, streams, target)) * 10) / 10;
+    }
 
     onStep?.('Débit montant…');
     const estUp = mbps(1e6, await uploadOnce(1e6));
