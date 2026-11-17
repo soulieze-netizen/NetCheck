@@ -3,15 +3,17 @@ import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C } from './src/analysis';
+import { BoxScreen } from './src/screens/BoxScreen';
 import { DayScreen } from './src/screens/DayView';
 import { LiveScreen } from './src/screens/Live';
 import { ReportScreen } from './src/screens/Report';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 
-type Tab = 'live' | 'day' | 'report' | 'settings';
+type Tab = 'live' | 'day' | 'box' | 'report' | 'settings';
 const TABS: { id: Tab; icon: string; label: string }[] = [
   { id: 'live', icon: '📡', label: 'Direct' },
   { id: 'day', icon: '📅', label: 'Journée' },
+  { id: 'box', icon: '🩺', label: 'Box' },
   { id: 'report', icon: '📄', label: 'Rapport' },
   { id: 'settings', icon: '⚙', label: 'Réglages' },
 ];
@@ -30,6 +32,7 @@ function Main() {
         <View style={styles.content}>
           {tab === 'live' && <LiveScreen />}
           {tab === 'day' && <DayScreen />}
+          {tab === 'box' && <BoxScreen />}
           {tab === 'report' && <ReportScreen />}
           {tab === 'settings' && <SettingsScreen />}
         </View>

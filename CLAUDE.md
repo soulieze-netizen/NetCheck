@@ -19,4 +19,9 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
 - Données : src/storage.ts (AsyncStorage, une fiche par jour, minutes = tableau compact). Bilans / verdict : src/analysis.ts.
 - Écran éteint (Android) : module natif local `modules/netcheck-background` (service de premier plan + verrous CPU/Wi-Fi,
   tâche JS « NetCheckKeepAlive »), piloté par src/background.ts. Donne aussi la passerelle (box) et le type de réseau.
+  Kotlin dans `modules/netcheck-background/android/` (le .gitignore n'exclut que `/android/` à la racine : avant le 17/11/2026
+  il excluait tous les dossiers `android/`, le Kotlin n'était pas dans le dépôt et l'APK tournait sans le module).
+- Diagnostic box (onglet 🩺 Box) : src/diagnostic.ts + src/screens/BoxScreen.tsx. Scan Wi-Fi natif (`scanWifi`, `wifiInfo`),
+  réactivité box/internet, lecture des pages 192.168.0.1 et 192.168.100.1 (modèle, signal si lisible sans mot de passe).
+  Connexion à la box avec mot de passe : pas encore faite, dépend du modèle.
 - Web : sondes en `no-cors`, horloge dans un Web Worker (pas ralentie en arrière-plan), box non testable.
