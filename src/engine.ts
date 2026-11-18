@@ -3,14 +3,15 @@
 import { Platform } from 'react-native';
 import NativeBg from '../modules/netcheck-background/src/NetCheckBackgroundModule';
 import { setBackground } from './background';
-import { IS_WEB, probe, speedTest, TARGETS } from './net';
+import { IS_TV, IS_WEB, probe, speedTest, TARGETS } from './net';
 import {
   dayKey,
   loadDay,
   loadSettings,
   saveDay,
   saveSettings,
-  iptvOrigin,
+  iptvName,
+  iptvUrls,
   type Cut,
   type Day,
   type MinuteStat,
@@ -43,8 +44,16 @@ export type Sample = {
   spike?: boolean; // temps de réponse anormalement haut par rapport à l'habitude
 };
 
-/** Dernière sonde du serveur IPTV */
+/** Dernière sonde d'un serveur IPTV */
 export type IptvSample = { at: number; ms: number | null };
+export type IptvView = {
+  srv: number; // 1 ou 2
+  url: string;
+  name: string;
+  blocked: boolean; // PC + serveur en http : aucune réponse depuis le début, le navigateur bloque sans doute le test
+  recent: IptvSample[]; // 2 dernières minutes
+  openCut: Cut | null;
+};
 
 export type EngineState = {
   running: boolean;
@@ -58,10 +67,7 @@ export type EngineState = {
   netType: string;
   lastSpeed: SpeedTest | null;
   nextSpeedAt: number | null;
-  iptvUrl: string; // '' = pas de test IPTV
-  iptvBlocked: boolean; // PC + serveur en http : aucune réponse depuis le début, le navigateur bloque sans doute le test
-  iptvRecent: IptvSample[]; // 2 dernières minutes
-  openIptvCut: Cut | null;
+  iptv: IptvView[]; // serveurs IPTV configurés (0, 1 ou 2)
 };
 
 type Listener = (s: EngineState) => void;
@@ -80,16 +86,8 @@ class Engine {
   private acc = newAcc();
   private prevBest: number | null = null;
   private prevBox: number | null = null;
-  // Serveur IPTV
-  private iptvBusy = false;
-  private iptvAt = 0;
-  private iptvRecent: IptvSample[] = [];
-  private iptvFails = 0;
-  private iptvFailSince = 0;
-  private openIptvCut: Cut | null = null;
-  // PC + serveur http : tant qu'aucune réponse n'est arrivée, on suppose que le navigateur bloque (contenu mixte) et on ne compte rien
-  private iptvSeenOk = false;
-  private iptvTried = 0;
+  // Serveurs IPTV
+  private iptv = [new IptvMonitor(this, 1), new IptvMonitor(this, 2)];
   // Coupure en cours
   private downSince = 0;
   private downBox = false;
@@ -105,10 +103,16 @@ class Engine {
   async init() {
     if (this.settings) return;
     this.settings = await loadSettings();
+    if (IS_TV && !this.settings.tvInit) {
+      // Sur la télé : pas de test de débit automatique (il saturerait la ligne et couperait la chaîne qu'on regarde)
+      this.settings = { ...this.settings, tvInit: true, speedEvery: 0, deviceLabel: this.settings.deviceLabel || 'Chromecast' };
+      saveSettings(this.settings);
+    }
     this.day = await loadDay(dayKey());
     const lastSp = this.day.speeds[this.day.speeds.length - 1];
     this.lastSpeedAt = lastSp?.at ?? 0;
-    if (this.settings.running) this.start();
+    // Sur la télé, la surveillance démarre dès l'ouverture : on lance l'appli une fois et on retourne à sa chaîne
+    if (this.settings.running || IS_TV) this.start();
     this.emit();
   }
 
@@ -123,9 +127,7 @@ class Engine {
     this.prevBest = this.prevBox = null;
     this.downSince = 0;
     this.openCut = null;
-    this.iptvRecent = [];
-    this.iptvFails = 0;
-    this.openIptvCut = null;
+    this.iptv.forEach((m) => m.reset());
     this.emit();
   }
 
@@ -151,22 +153,16 @@ class Engine {
       netType: this.netType,
       lastSpeed: this.day?.speeds[this.day.speeds.length - 1] ?? null,
       nextSpeedAt: this.running && every > 0 ? Math.max(Date.now(), this.lastSpeedAt + every * 60000) : null,
-      iptvUrl: this.iptvUrl(),
-      iptvBlocked: this.iptvBlocked(),
-      iptvRecent: this.iptvRecent,
-      openIptvCut: this.openIptvCut,
+      iptv: this.iptv.filter((m) => m.url()).map((m) => m.view()),
     };
   }
 
-  private iptvUrl() {
-    return iptvOrigin(this.settings?.iptvUrl ?? '');
+  /** Adresse (origine) du serveur IPTV n° srv, '' si non configuré */
+  iptvUrlOf(srv: number) {
+    return this.settings ? iptvUrls(this.settings)[srv - 1] : '';
   }
-  /** Page web en https + serveur en http : bloqué par défaut par le navigateur (« contenu non sécurisé » à autoriser) */
-  private iptvMixed() {
-    return IS_WEB && this.iptvUrl().startsWith('http:');
-  }
-  private iptvBlocked() {
-    return this.iptvMixed() && !this.iptvSeenOk && this.iptvTried >= 3;
+  iptvNameOf(srv: number) {
+    return this.settings ? iptvName(this.settings, srv) : 'serveur IPTV';
   }
 
   private emit() {
@@ -179,12 +175,8 @@ class Engine {
     this.settings = { ...this.settings!, ...patch };
     saveSettings(this.settings);
     if ('boxIp' in patch) this.boxCheckedAt = 0;
-    if ('iptvUrl' in patch) {
-      this.closeIptvCut(Date.now());
-      this.iptvRecent = [];
-      this.iptvSeenOk = false;
-      this.iptvTried = 0;
-    }
+    if ('iptvUrl' in patch) this.iptv[0].reset();
+    if ('iptvUrl2' in patch) this.iptv[1].reset();
     this.emit();
   }
 
@@ -204,7 +196,7 @@ class Engine {
     this.ticker?.stop();
     this.ticker = null;
     this.closeCut(Date.now());
-    this.closeIptvCut(Date.now());
+    this.iptv.forEach((m) => m.close(Date.now()));
     this.flushMinute();
     if (this.day) await saveDay(this.day);
     this.updateSettings({ running: false });
@@ -365,6 +357,9 @@ class Engine {
         a.iptvN,
         a.iptvLost,
         a.iptvLatSum,
+        a.iptv2N,
+        a.iptv2Lost,
+        a.iptv2LatSum,
       ];
       // Même minute déjà partiellement remplie (redémarrage) : on additionne
       if (prev) {
@@ -382,75 +377,44 @@ class Engine {
     const key = dayKey(new Date(now));
     if (this.day && this.day.date === key) return;
     this.closeCut(now);
-    this.closeIptvCut(now);
+    this.iptv.forEach((m) => m.close(now));
     this.flushMinute();
     this.minuteIdx = -1;
     if (this.day) await saveDay(this.day);
     this.day = await loadDay(key);
   }
 
-  // ---------- Serveur IPTV (toutes les 2 s, en parallèle des sondes internet) ----------
+  // ---------- Serveurs IPTV (toutes les 2 s, en parallèle des sondes internet) ----------
   private maybeIptv(now: number) {
-    const url = this.iptvUrl();
-    if (!url || this.iptvBusy || this.testing) return;
-    if (now - this.iptvAt < IPTV_EVERY_MS) return;
-    this.iptvAt = now;
-    this.iptvBusy = true;
-    probe(`${url}/`, IPTV_TIMEOUT_MS)
-      .then((ms) => this.recordIptv(now, ms))
-      .finally(() => {
-        this.iptvBusy = false;
-      });
+    if (this.testing) return;
+    for (const m of this.iptv) m.maybe(now);
   }
 
-  private recordIptv(at: number, ms: number | null) {
-    if (!this.running || this.testing || !this.day) return;
-    if (this.iptvMixed() && !this.iptvSeenOk) {
-      // Pas encore de réponse : peut-être bloqué par le navigateur, on ne compte pas d'échec
-      this.iptvTried++;
-      if (ms == null) return this.emit();
-      this.iptvSeenOk = true;
-    }
-    this.iptvRecent.push({ at, ms });
-    while (this.iptvRecent.length && this.iptvRecent[0].at < Date.now() - 120000) this.iptvRecent.shift();
-    // Si internet est lui-même coupé, ce n'est pas la faute du serveur IPTV : on ne compte pas
-    if (this.last?.state === 'down' || this.openCut) {
-      this.iptvFails = 0;
-      this.closeIptvCut(at);
-      return;
-    }
-    const a = this.acc;
-    a.iptvN++;
-    if (ms == null) {
-      a.iptvLost++;
-      if (!this.iptvFails) this.iptvFailSince = at;
-      this.iptvFails++;
-      if (!this.openIptvCut && this.iptvFails >= IPTV_MIN_CUT) {
-        this.openIptvCut = { start: this.iptvFailSince, end: at + IPTV_EVERY_MS, where: '?' };
-        (this.day.iptvCuts ??= []).push(this.openIptvCut);
-      }
-      if (this.openIptvCut) this.openIptvCut.end = at + IPTV_EVERY_MS;
-    } else {
-      a.iptvLatSum += ms;
-      this.iptvFails = 0;
-      this.closeIptvCut(at);
-    }
+  /** Appelé par un moniteur IPTV : internet est-il coupé en ce moment ? (alors ce n'est pas la faute du serveur) */
+  internetDown() {
+    return this.last?.state === 'down' || !!this.openCut;
+  }
+  canRecordIptv() {
+    return this.running && !this.testing && !!this.day;
+  }
+  addIptvCut(c: Cut) {
+    if (!this.day) return;
+    (this.day.iptvCuts ??= []).push(c);
+  }
+  saveToday() {
+    if (this.day) saveDay(this.day);
+  }
+  iptvAcc() {
+    return this.acc;
+  }
+  changed() {
     this.emit();
-  }
-
-  private closeIptvCut(at: number) {
-    if (this.openIptvCut) {
-      this.openIptvCut.end = at;
-      this.openIptvCut = null;
-      if (this.day) saveDay(this.day);
-    }
-    this.iptvFails = 0;
   }
 
   // ---------- Test de débit ----------
   private maybeSpeedTest(now: number, up: boolean) {
     const every = this.settings?.speedEvery ?? 0;
-    if (!every || this.testing || !up || this.openCut) return;
+    if (IS_TV || !every || this.testing || !up || this.openCut) return;
     if (now - this.lastSpeedAt < every * 60000) return;
     this.runSpeedTest();
   }
@@ -511,7 +475,110 @@ function newAcc() {
     iptvN: 0,
     iptvLost: 0,
     iptvLatSum: 0,
+    iptv2N: 0,
+    iptv2Lost: 0,
+    iptv2LatSum: 0,
   };
+}
+
+/** Surveillance d'un serveur IPTV (toutes les 2 s, ne bloque pas la mesure de chaque seconde) */
+class IptvMonitor {
+  private busy = false;
+  private at = 0;
+  private recent: IptvSample[] = [];
+  private fails = 0;
+  private failSince = 0;
+  private openCut: Cut | null = null;
+  // PC + serveur http : tant qu'aucune réponse n'est arrivée, on suppose que le navigateur bloque (contenu mixte) et on ne compte rien
+  private seenOk = false;
+  private tried = 0;
+
+  constructor(
+    private eng: Engine,
+    readonly srv: number
+  ) {}
+
+  url() {
+    return this.eng.iptvUrlOf(this.srv);
+  }
+  /** Page web en https + serveur en http : bloqué par défaut par le navigateur (« contenu non sécurisé » à autoriser) */
+  private mixed() {
+    return IS_WEB && this.url().startsWith('http:');
+  }
+  view(): IptvView {
+    return {
+      srv: this.srv,
+      url: this.url(),
+      name: this.eng.iptvNameOf(this.srv),
+      blocked: this.mixed() && !this.seenOk && this.tried >= 3,
+      recent: this.recent,
+      openCut: this.openCut,
+    };
+  }
+
+  reset() {
+    this.close(Date.now());
+    this.recent = [];
+    this.seenOk = false;
+    this.tried = 0;
+  }
+
+  maybe(now: number) {
+    const url = this.url();
+    if (!url || this.busy || now - this.at < IPTV_EVERY_MS) return;
+    this.at = now;
+    this.busy = true;
+    probe(`${url}/`, IPTV_TIMEOUT_MS)
+      .then((ms) => this.record(now, ms))
+      .finally(() => {
+        this.busy = false;
+      });
+  }
+
+  private record(at: number, ms: number | null) {
+    if (!this.eng.canRecordIptv()) return;
+    if (this.mixed() && !this.seenOk) {
+      // Pas encore de réponse : peut-être bloqué par le navigateur, on ne compte pas d'échec
+      this.tried++;
+      if (ms == null) return this.eng.changed();
+      this.seenOk = true;
+    }
+    this.recent.push({ at, ms });
+    while (this.recent.length && this.recent[0].at < Date.now() - 120000) this.recent.shift();
+    // Si internet est lui-même coupé, ce n'est pas la faute du serveur IPTV : on ne compte pas
+    if (this.eng.internetDown()) {
+      this.close(at);
+      return this.eng.changed();
+    }
+    const a = this.eng.iptvAcc();
+    if (this.srv === 1) a.iptvN++;
+    else a.iptv2N++;
+    if (ms == null) {
+      if (this.srv === 1) a.iptvLost++;
+      else a.iptv2Lost++;
+      if (!this.fails) this.failSince = at;
+      this.fails++;
+      if (!this.openCut && this.fails >= IPTV_MIN_CUT) {
+        this.openCut = { start: this.failSince, end: at + IPTV_EVERY_MS, where: '?', ...(this.srv === 2 ? { srv: 2 } : {}) };
+        this.eng.addIptvCut(this.openCut);
+      }
+      if (this.openCut) this.openCut.end = at + IPTV_EVERY_MS;
+    } else {
+      if (this.srv === 1) a.iptvLatSum += ms;
+      else a.iptv2LatSum += ms;
+      this.close(at);
+    }
+    this.eng.changed();
+  }
+
+  close(at: number) {
+    if (this.openCut) {
+      this.openCut.end = at;
+      this.openCut = null;
+      this.eng.saveToday();
+    }
+    this.fails = 0;
+  }
 }
 
 /** Moyenne de deux latences moyennes, pondérée par le nombre de secondes avec réponse */

@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { C } from '../analysis';
 import { engine } from '../engine';
-import { IS_WEB } from '../net';
+import { IS_TV, IS_WEB } from '../net';
 import { clearAllDays, iptvOrigin, type Settings } from '../storage';
 import { Btn, Card, H, T } from '../ui';
 import { useEngine } from './Live';
@@ -41,7 +41,10 @@ export function SettingsScreen() {
 
       <Card>
         <H>Test de débit automatique</H>
-        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+        {IS_TV ? (
+          <T muted>Désactivé sur le Chromecast : un test sature la ligne pendant ~15 s et couperait la chaîne que tu regardes.</T>
+        ) : null}
+        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', display: IS_TV ? 'none' : 'flex' }}>
           {[0, 15, 30, 60].map((n) => (
             <Btn
               key={n}
@@ -85,32 +88,14 @@ export function SettingsScreen() {
       </Card>
 
       <Card>
-        <H>📺 Serveur IPTV</H>
+        <H>📺 Serveurs IPTV</H>
         <T muted>
-          Colle l’adresse du serveur de ton code Xtream (ex. http://monserveur.com:8080). NetCheck le teste toutes les 2 s : s’il ne répond plus alors
-          qu’internet marche, c’est le fournisseur IPTV qui coupe, pas VOO. Seuls l’adresse et le port sont gardés, jamais ton identifiant ni ton mot de
-          passe.
+          Colle l’adresse du serveur de ton code Xtream (ex. http://monserveur.com:8080). Si ton fournisseur t’en a donné deux, mets les deux : chacune
+          est testée à part, toutes les 2 s. Si un serveur ne répond plus alors qu’internet marche, c’est le fournisseur IPTV qui coupe, pas VOO. Seuls
+          l’adresse et le port sont gardés, jamais ton identifiant ni ton mot de passe.
         </T>
-        <TextInput
-          value={s.iptvUrl}
-          onChangeText={(t) => engine.updateSettings({ iptvUrl: t.trim() })}
-          placeholder="http://serveur:port (vide = pas de test)"
-          placeholderTextColor={C.muted}
-          style={styles.input}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        {s.iptvUrl ? (
-          iptvOrigin(s.iptvUrl) ? (
-            <T muted style={{ marginTop: 4 }}>
-              Testé : {iptvOrigin(s.iptvUrl)}
-              {IS_WEB && iptvOrigin(s.iptvUrl).startsWith('http:') ? ' — sur PC, le navigateur bloque les serveurs en http : dans Chrome, cadenas → Paramètres du site → Contenu non sécurisé → Autoriser, puis recharge la page.' : ''}
-            </T>
-          ) : (
-            <T style={{ color: C.down, marginTop: 4 }}>Adresse non reconnue.</T>
-          )
-        ) : null}
+        <IptvField label="Serveur 1" value={s.iptvUrl} onChange={(t) => engine.updateSettings({ iptvUrl: t })} />
+        <IptvField label="Serveur 2 (facultatif)" value={s.iptvUrl2} onChange={(t) => engine.updateSettings({ iptvUrl2: t })} />
       </Card>
 
       <Card>
@@ -152,6 +137,37 @@ export function SettingsScreen() {
         NetCheck 1.0
       </T>
     </ScrollView>
+  );
+}
+
+function IptvField({ label, value, onChange }: { label: string; value: string; onChange: (t: string) => void }) {
+  const o = iptvOrigin(value ?? '');
+  return (
+    <>
+      <Text style={styles.sub}>{label}</Text>
+      <TextInput
+        value={value ?? ''}
+        onChangeText={(t) => onChange(t.trim())}
+        placeholder="http://serveur:port (vide = pas de test)"
+        placeholderTextColor={C.muted}
+        style={styles.input}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+      {value ? (
+        o ? (
+          <T muted style={{ marginTop: 4 }}>
+            Testé : {o}
+            {IS_WEB && o.startsWith('http:')
+              ? ' — sur PC, le navigateur bloque les serveurs en http : dans Chrome, cadenas → Paramètres du site → Contenu non sécurisé → Autoriser, puis recharge la page.'
+              : ''}
+          </T>
+        ) : (
+          <T style={{ color: C.down, marginTop: 4 }}>Adresse non reconnue.</T>
+        )
+      ) : null}
+    </>
   );
 }
 

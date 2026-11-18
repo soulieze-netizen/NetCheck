@@ -28,6 +28,7 @@ export function DayScreen() {
   const sum = useMemo(() => (day && st ? summarize(day, st.settings) : null), [day, st?.last, st?.settings]);
   if (!st || !day || !sum) return null;
   const set = st.settings;
+  const used = sum.iptv.filter((x) => x.n > 0 || x.cuts > 0);
 
   return (
     <ScrollView contentContainerStyle={{ padding: 14 }}>
@@ -100,18 +101,23 @@ export function DayScreen() {
         ))}
       </Card>
 
-      {sum.iptvN > 0 || (day.iptvCuts ?? []).length > 0 ? (
+      {sum.iptv.some((x) => x.n > 0 || x.cuts > 0) ? (
         <Card>
-          <H>📺 Serveur IPTV ({(day.iptvCuts ?? []).length} décrochage{(day.iptvCuts ?? []).length > 1 ? 's' : ''})</H>
-          <T muted>
-            {sum.iptvN} tests · {pct(sum.iptvLossPct)} sans réponse · {sum.iptvAvgLat ?? '—'} ms en moyenne. Seuls les moments où internet marchait
-            sont comptés : un décrochage ici vient du fournisseur IPTV.
-          </T>
+          <H>
+            📺 Serveur{used.length > 1 ? 's' : ''} IPTV ({(day.iptvCuts ?? []).length} décrochage{(day.iptvCuts ?? []).length > 1 ? 's' : ''})
+          </H>
+          {used.map((x) => (
+            <T muted key={x.srv}>
+              {used.length > 1 ? `Serveur ${x.srv} : ` : ''}
+              {x.n} tests · {pct(x.lossPct)} sans réponse · {x.avgLat ?? '—'} ms en moyenne · {x.cuts} décrochage{x.cuts > 1 ? 's' : ''}
+            </T>
+          ))}
+          <T muted>Seuls les moments où internet marchait sont comptés : un décrochage ici vient du fournisseur IPTV.</T>
           {[...(day.iptvCuts ?? [])].reverse().map((c) => (
-            <View key={c.start} style={styles.line}>
+            <View key={`${c.srv ?? 1}-${c.start}`} style={styles.line}>
               <Text style={styles.time}>{hhmmss(c.start)}</Text>
               <T style={{ flex: 1 }}>{dur(cutSeconds(c))}</T>
-              <Text style={{ color: C.down, fontWeight: '700' }}>IPTV</Text>
+              <Text style={{ color: C.down, fontWeight: '700' }}>{used.length > 1 ? `IPTV ${c.srv ?? 1}` : 'IPTV'}</Text>
             </View>
           ))}
         </Card>

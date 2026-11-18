@@ -6,6 +6,8 @@ import { fetch as expoFetch } from 'expo/fetch';
 import { Platform } from 'react-native';
 
 export const IS_WEB = Platform.OS === 'web';
+/** Chromecast avec Google TV / Android TV */
+export const IS_TV = Platform.OS === 'android' && Platform.isTV;
 
 export const TARGETS = {
   cloudflare: 'https://1.1.1.1/cdn-cgi/trace',

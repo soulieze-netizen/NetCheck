@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, pct, summarize, verdict, type DaySummary } from '../analysis';
 import { IS_WEB } from '../net';
-import { listDays, loadDay, type Day, type Settings } from '../storage';
+import { iptvName, listDays, loadDay, type Day, type Settings } from '../storage';
 import { Btn, Card, H, T } from '../ui';
 import { useEngine } from './Live';
 
@@ -133,7 +133,12 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
         d.downS
       )}</td><td>${d.uptime != null ? d.uptime.toFixed(2) : '—'} %</td><td>${d.avgLat ?? '—'} ms</td><td>${
         d.jitter != null ? `${d.jitter} ms` : '—'
-      }</td><td>${pct(d.reqLossPct, 2)}</td><td>${d.iptvN ? `${d.iptvCuts} (${pct(d.iptvLossPct)})` : '—'}</td><td>${fmtMbps(d.avgDown)}</td><td>${fmtMbps(
+      }</td><td>${pct(d.reqLossPct, 2)}</td><td>${
+        d.iptv
+          .filter((x) => x.n > 0)
+          .map((x) => `${d.iptv.filter((y) => y.n > 0).length > 1 ? `n°${x.srv} : ` : ''}${x.cuts} (${pct(x.lossPct)})`)
+          .join('<br>') || '—'
+      }</td><td>${fmtMbps(d.avgDown)}</td><td>${fmtMbps(
         d.minDown
       )}</td><td>${d.underMin}/${d.speeds.filter((x) => x.down != null).length}</td></tr>`
     )
@@ -150,7 +155,7 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
         .join('');
       const iptv = (d.iptvCuts ?? [])
         .slice(-200)
-        .map((c) => `<tr><td>${hhmmss(c.start)}</td><td>${dur(cutSeconds(c))}</td><td>serveur IPTV (internet OK)</td></tr>`)
+        .map((c) => `<tr><td>${hhmmss(c.start)}</td><td>${dur(cutSeconds(c))}</td><td>${esc(iptvName(s, c.srv ?? 1))} (internet OK)</td></tr>`)
         .join('');
       return `<h3>${esc(dayLabel(d.date))}</h3>
       ${cuts ? `<table><tr><th>Début</th><th>Durée</th><th>Où</th></tr>${cuts}</table>` : '<p>Aucune coupure.</p>'}
@@ -166,7 +171,7 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
   <p>${esc(contract)}</p>
   <p>Méthode : contrôle chaque seconde de la box et de deux serveurs internet (Cloudflare 1.1.1.1, Google) ; coupure = au moins 2 s sans réponse d’internet.
   Gigue = écart moyen du temps de réponse d’une seconde à l’autre ; pic = temps de réponse au moins 3 fois (et 150 ms) au-dessus de la médiane de la minute précédente ;
-  requêtes perdues = sondes sans réponse en 2 s, hors coupures.${s.iptvUrl ? ' Serveur IPTV testé toutes les 2 s, uniquement quand internet répond.' : ''}
+  requêtes perdues = sondes sans réponse en 2 s, hors coupures.${s.iptvUrl || s.iptvUrl2 ? ' Serveur(s) IPTV testé(s) toutes les 2 s, uniquement quand internet répond.' : ''}
   Test de débit (Cloudflare) toutes les ${s.speedEvery || '—'} min.</p>
   <h2>Bilan</h2><ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
   <h2>Jour par jour</h2>

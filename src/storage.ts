@@ -19,6 +19,10 @@ export type Settings = {
   deviceLabel: string;
   /** Serveur IPTV à surveiller (ex. http://monserveur.com:8080), vide = pas de test */
   iptvUrl: string;
+  /** 2e serveur IPTV (beaucoup de fournisseurs en donnent deux : connexion / vidéo, ou secours) */
+  iptvUrl2: string;
+  /** Réglages « télé » déjà appliqués (Chromecast / Android TV) */
+  tvInit?: boolean;
 };
 
 export const defaultSettings: Settings = {
@@ -33,13 +37,15 @@ export const defaultSettings: Settings = {
   running: false,
   deviceLabel: '',
   iptvUrl: '',
+  iptvUrl2: '',
 };
 
 /**
  * Une minute : [mesures, s. internet coupé, s. box injoignable, s. lentes, latence moy. ms, latence max ms, pertes isolées,
  *  gigue internet (somme ms), gigue internet (nb), pics, requêtes internet envoyées, requêtes perdues,
  *  gigue box (somme ms), gigue box (nb), sondes IPTV, sondes IPTV sans réponse, latence IPTV (somme ms des réponses)]
- * Les 10 derniers champs n'existent pas dans les mesures d'avant le 18/11/2026 (lire avec ?? 0).
+ *  puis la même chose pour le 2e serveur IPTV (sondes, sans réponse, latence).
+ * Les champs à partir de la gigue n'existent pas dans les mesures d'avant le 18/11/2026 (lire avec ?? 0).
  */
 export type MinuteStat = [
   n: number,
@@ -59,15 +65,24 @@ export type MinuteStat = [
   iptvN?: number,
   iptvLost?: number,
   iptvLatSum?: number,
+  iptv2N?: number,
+  iptv2Lost?: number,
+  iptv2LatSum?: number,
 ];
 /** Index des champs ajoutés (gigue, pertes, IPTV) */
-export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16 } as const;
+export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16, iptv2N: 17, iptv2Lost: 18, iptv2LatSum: 19 } as const;
+/** Index des champs de chaque serveur IPTV (1 et 2) */
+export const IPTV_M = [
+  { n: M.iptvN, lost: M.iptvLost, lat: M.iptvLatSum },
+  { n: M.iptv2N, lost: M.iptv2Lost, lat: M.iptv2LatSum },
+] as const;
 export const mv = (m: MinuteStat, i: number) => (m[i] as number | undefined) ?? 0;
 
 export type Cut = {
   start: number; // ms
   end: number; // ms (= start tant que la coupure dure)
   where: 'box' | 'internet' | '?'; // box/Wi-Fi injoignable, ou box OK mais internet coupé (ligne VOO)
+  srv?: number; // décrochage IPTV : serveur 2 (absent = serveur 1)
 };
 
 export type SpeedTest = {
@@ -145,4 +160,14 @@ export function iptvOrigin(text: string): string {
   const m = text.trim().match(/^(https?:\/\/)?([^\/?#\s]+)/i);
   if (!m || !m[2].includes('.')) return '';
   return `${(m[1] || 'http://').toLowerCase()}${m[2].replace(/^.*@/, '')}`;
+}
+
+/** Les adresses IPTV configurées : [serveur 1, serveur 2] (chaîne vide = pas de test) */
+export const iptvUrls = (s: Settings) => [iptvOrigin(s.iptvUrl ?? ''), iptvOrigin(s.iptvUrl2 ?? '')];
+/** Nom d'un serveur IPTV dans les textes : « serveur IPTV » s'il n'y en a qu'un, sinon « serveur IPTV 1 (hôte) » */
+export function iptvName(s: Settings, srv: number) {
+  const urls = iptvUrls(s);
+  const host = urls[srv - 1]?.replace(/^https?:\/\//, '');
+  if (urls.filter(Boolean).length < 2) return 'serveur IPTV';
+  return `serveur IPTV ${srv}${host ? ` (${host})` : ''}`;
 }

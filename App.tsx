@@ -8,6 +8,7 @@ import { DayScreen } from './src/screens/DayView';
 import { LiveScreen } from './src/screens/Live';
 import { ReportScreen } from './src/screens/Report';
 import { SettingsScreen } from './src/screens/SettingsScreen';
+import { FOCUS, useFocus } from './src/ui';
 
 type Tab = 'live' | 'day' | 'box' | 'report' | 'settings';
 const TABS: { id: Tab; icon: string; label: string }[] = [
@@ -39,13 +40,20 @@ function Main() {
       </View>
       <View style={[styles.tabs, { paddingBottom: 6 + insets.bottom }]}>
         {TABS.map((t) => (
-          <Pressable key={t.id} style={[styles.tab, tab === t.id && styles.tabOn]} onPress={() => setTab(t.id)}>
-            <Text style={styles.tabIcon}>{t.icon}</Text>
-            <Text style={[styles.tabLabel, tab === t.id && { color: C.text }]}>{t.label}</Text>
-          </Pressable>
+          <TabBtn key={t.id} t={t} on={tab === t.id} onPress={() => setTab(t.id)} />
         ))}
       </View>
     </View>
+  );
+}
+
+function TabBtn({ t, on, onPress }: { t: (typeof TABS)[number]; on: boolean; onPress: () => void }) {
+  const f = useFocus();
+  return (
+    <Pressable onFocus={f.onFocus} onBlur={f.onBlur} style={[styles.tab, on && styles.tabOn, f.focused && FOCUS]} onPress={onPress}>
+      <Text style={styles.tabIcon}>{t.icon}</Text>
+      <Text style={[styles.tabLabel, on && { color: C.text }]}>{t.label}</Text>
+    </Pressable>
   );
 }
 

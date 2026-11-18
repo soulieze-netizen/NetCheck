@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { C, cutSeconds, dur, fmtMbps, hhmm, pct, summarize } from '../analysis';
 import { engine, SLOW_MS, type EngineState, type Sample } from '../engine';
-import { IS_WEB } from '../net';
+import { IS_TV, IS_WEB } from '../net';
 import { Btn, Card, H, T } from '../ui';
 
 export function useEngine() {
@@ -35,7 +35,8 @@ export function LiveScreen() {
   }[state];
   const sp = st.lastSpeed;
   const set = st.settings;
-  const lastIptv = st.iptvRecent[st.iptvRecent.length - 1];
+  const two = st.iptv.length > 1;
+  const label = (srv: number) => `📺 Serveur IPTV${two ? ` ${srv}` : ''}`;
 
   return (
     <ScrollView contentContainerStyle={{ padding: 14 }}>
@@ -51,24 +52,30 @@ export function LiveScreen() {
           <Row label={`🏠 Box${st.boxIp ? ` (${st.boxIp})` : ''}`} value={IS_WEB ? 'non mesurée sur PC' : ms(s?.box)} color={msColor(s?.box)} />
           <Row label="🌐 Cloudflare" value={ms(s?.cf)} color={msColor(s?.cf)} />
           <Row label="🌐 Google" value={ms(s?.g)} color={msColor(s?.g)} />
-          {st.iptvUrl ? (
-            <Row
-              label="📺 Serveur IPTV"
-              value={st.iptvBlocked ? 'bloqué par le navigateur' : !st.running || !lastIptv ? '—' : ms(lastIptv.ms)}
-              color={st.iptvBlocked || !lastIptv ? C.muted : msColor(lastIptv.ms)}
-            />
-          ) : null}
+          {st.iptv.map((v) => {
+            const last = v.recent[v.recent.length - 1];
+            return (
+              <Row
+                key={v.srv}
+                label={label(v.srv)}
+                value={v.blocked ? 'bloqué par le navigateur' : !st.running || !last ? '—' : ms(last.ms)}
+                color={v.blocked || !last ? C.muted : msColor(last.ms)}
+              />
+            );
+          })}
         </View>
-        {st.iptvBlocked && (
+        {st.iptv.some((v) => v.blocked) && (
           <T muted style={{ marginTop: 6 }}>
-            Le serveur IPTV ne répond jamais depuis le PC : le navigateur bloque sans doute les serveurs en http. Dans Chrome : cadenas à gauche de
+            Un serveur IPTV ne répond jamais depuis le PC : le navigateur bloque sans doute les serveurs en http. Dans Chrome : cadenas à gauche de
             l’adresse → Paramètres du site → Contenu non sécurisé → Autoriser, puis recharge la page.
           </T>
         )}
-        {st.openIptvCut && (
-          <T style={{ color: C.down, marginTop: 6 }}>
-            Le serveur IPTV ne répond plus depuis {hhmm(st.openIptvCut.start)} alors qu’internet marche (fournisseur IPTV)
-          </T>
+        {st.iptv.map((v) =>
+          v.openCut ? (
+            <T key={v.srv} style={{ color: C.down, marginTop: 6 }}>
+              Le {v.name} ne répond plus depuis {hhmm(v.openCut.start)} alors qu’internet marche (fournisseur IPTV)
+            </T>
+          ) : null
         )}
         <Spark samples={st.recent} />
         <T muted>Les 2 dernières minutes, une barre par seconde (hauteur = temps de réponse).</T>
@@ -80,6 +87,12 @@ export function LiveScreen() {
           )}
           <Btn label="⚡ Tester le débit" disabled={!!st.testing} onPress={() => engine.runSpeedTest()} />
         </View>
+        {IS_TV && (
+          <T muted style={{ marginTop: 8 }}>
+            Sur le Chromecast, la surveillance tourne toute seule en arrière-plan : tu peux retourner à ta chaîne. Pas de test de débit automatique ici
+            (il saturerait la ligne et couperait l’image).
+          </T>
+        )}
         {IS_WEB && st.running && (
           <T muted style={{ marginTop: 8 }}>
             Laisse cet onglet ouvert (il peut être en arrière-plan) et empêche la mise en veille du PC.
@@ -113,12 +126,14 @@ export function LiveScreen() {
                 {sum.spikes > 1 ? 's' : ''} · {pct(sum.reqLossPct, 2)} de requêtes perdues
               </T>
             )}
-            {sum.iptvN > 0 && (
-              <T muted>
-                📺 Serveur IPTV : {sum.iptvCuts} décrochage{sum.iptvCuts > 1 ? 's' : ''}
-                {sum.iptvCuts ? ` (plus long ${dur(sum.iptvLongest)})` : ''} · {pct(sum.iptvLossPct)} sans réponse · {sum.iptvAvgLat ?? '—'} ms
-              </T>
-            )}
+            {sum.iptv
+              .filter((x) => x.n > 0)
+              .map((x) => (
+                <T muted key={x.srv}>
+                  {label(x.srv)} : {x.cuts} décrochage{x.cuts > 1 ? 's' : ''}
+                  {x.cuts ? ` (plus long ${dur(x.longest)})` : ''} · {pct(x.lossPct)} sans réponse · {x.avgLat ?? '—'} ms
+                </T>
+              ))}
           </>
         ) : (
           <T muted>Pas encore de mesure aujourd’hui.</T>
@@ -179,8 +194,6 @@ function Stability({ st }: { st: EngineState }) {
   const req = up.length * 2;
   const lost = up.reduce((a, x) => a + (x.cf == null ? 1 : 0) + (x.g == null ? 1 : 0), 0);
   const lossPct = req ? (100 * lost) / req : null;
-  const ip = st.iptvRecent;
-  const ipLost = ip.filter((x) => x.ms == null).length;
   const level = (v: number | null, warn: number, bad: number) => (v == null ? C.muted : v >= bad ? C.down : v >= warn ? C.slow : C.ok);
   return (
     <Card>
@@ -190,9 +203,19 @@ function Stability({ st }: { st: EngineState }) {
         {!IS_WEB && <Row label="Gigue jusqu’à la box (Wi-Fi)" value={bj == null ? '—' : `${bj} ms`} color={level(bj, 10, 20)} />}
         <Row label="Pics de temps de réponse" value={String(spikes)} color={level(spikes, 2, 6)} />
         <Row label="Requêtes perdues" value={pct(lossPct)} color={level(lossPct, 0.5, 2)} />
-        {st.iptvUrl && !st.iptvBlocked ? (
-          <Row label="📺 IPTV sans réponse" value={ip.length ? `${ipLost} / ${ip.length}` : '—'} color={level(ip.length ? ipLost : null, 1, 2)} />
-        ) : null}
+        {st.iptv
+          .filter((v) => !v.blocked)
+          .map((v) => {
+            const lostN = v.recent.filter((x) => x.ms == null).length;
+            return (
+              <Row
+                key={v.srv}
+                label={`📺 IPTV${st.iptv.length > 1 ? ` ${v.srv}` : ''} sans réponse`}
+                value={v.recent.length ? `${lostN} / ${v.recent.length}` : '—'}
+                color={level(v.recent.length ? lostN : null, 1, 2)}
+              />
+            );
+          })}
       </View>
       <T muted style={{ marginTop: 6 }}>
         La gigue, c’est l’irrégularité du temps de réponse d’une seconde à l’autre. Au-delà de ~30 ms, une vidéo en direct peut saccader ou couper

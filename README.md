@@ -11,7 +11,7 @@ et **tests de débit** réguliers comparés aux vitesses du contrat. Rapport PDF
   - coupure = au moins 2 s sans internet ; 1 seule seconde = « perte »
   - **gigue** (écart de temps de réponse d'une seconde à l'autre), vers internet et vers la box (= qualité du Wi-Fi)
   - **pics** (temps de réponse ≥ 3× et +150 ms par rapport à la médiane de la minute précédente) et **requêtes perdues** hors coupures
-- **Toutes les 2 s (option)** : le serveur IPTV (adresse Xtream dans Réglages). S'il ne répond plus alors qu'internet marche → fournisseur IPTV.
+- **Toutes les 2 s (option)** : un ou deux serveurs IPTV (adresses Xtream dans Réglages), chacun à part. S'il ne répond plus alors qu'internet marche → fournisseur IPTV.
   Sur PC, si le serveur est en http : Chrome → cadenas → Paramètres du site → Contenu non sécurisé → Autoriser.
 - **Toutes les 15 / 30 / 60 min** : débit descendant, montant et ping (serveurs Cloudflare).
 - Frise minute par minute, bilans jour par jour, verdict, export PDF.
@@ -19,6 +19,8 @@ et **tests de débit** réguliers comparés aux vitesses du contrat. Rapport PDF
 ## Où l'utiliser
 - **Téléphone Android** (Wi-Fi) : APK dans l'onglet *Releases* du dépôt (« NetCheck pour Android »).
   La mesure continue écran éteint (notification « NetCheck surveille »).
+- **Chromecast avec Google TV** : le même APK s'installe sur la télé (icône dans les applis). La surveillance démarre à l'ouverture
+  et continue pendant qu'on regarde une chaîne ; pas de test de débit automatique sur la télé.
 - **PC** (branché en câble à la box) : https://soulieze-netizen.github.io/NetCheck/ dans le navigateur.
   Laisser l'onglet ouvert et désactiver la mise en veille de Windows. (La box n'est pas testable depuis une page web.)
 
