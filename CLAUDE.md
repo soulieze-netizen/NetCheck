@@ -19,7 +19,8 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
 - Données : src/storage.ts (AsyncStorage, une fiche par jour, minutes = tableau compact). Bilans / verdict : src/analysis.ts.
   MinuteStat : 7 champs d'origine + 10 ajoutés le 18/11/2026 (gigue internet/box, pics, requêtes perdues, IPTV) → index dans `M`, lire avec `mv()` (absent = 0).
 - Serveur IPTV (réglage `iptvUrl`, réduit à l'origine par `iptvOrigin`, jamais les identifiants) : sondé toutes les 2 s hors du tick (ne le bloque pas),
-  compté seulement si internet répond ; ≥ 2 échecs de suite = `day.iptvCuts`. Sur PC impossible si le serveur est en http (contenu mixte).
+  compté seulement si internet répond ; ≥ 2 échecs de suite = `day.iptvCuts`. Sur PC + serveur http (contenu mixte) : il faut autoriser « Contenu non sécurisé » pour le site dans Chrome ;
+  tant qu'aucune réponse n'est arrivée, rien n'est compté (`iptvSeenOk`) et l'écran Direct affiche l'astuce.
 - Écran éteint (Android) : module natif local `modules/netcheck-background` (service de premier plan + verrous CPU/Wi-Fi,
   tâche JS « NetCheckKeepAlive »), piloté par src/background.ts. Donne aussi la passerelle (box) et le type de réseau.
   Kotlin dans `modules/netcheck-background/android/` (le .gitignore n'exclut que `/android/` à la racine : avant le 17/11/2026

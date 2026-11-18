@@ -54,11 +54,17 @@ export function LiveScreen() {
           {st.iptvUrl ? (
             <Row
               label="📺 Serveur IPTV"
-              value={st.iptvBlocked ? 'non testable sur PC (http)' : !st.running || !lastIptv ? '—' : ms(lastIptv.ms)}
+              value={st.iptvBlocked ? 'bloqué par le navigateur' : !st.running || !lastIptv ? '—' : ms(lastIptv.ms)}
               color={st.iptvBlocked || !lastIptv ? C.muted : msColor(lastIptv.ms)}
             />
           ) : null}
         </View>
+        {st.iptvBlocked && (
+          <T muted style={{ marginTop: 6 }}>
+            Le serveur IPTV ne répond jamais depuis le PC : le navigateur bloque sans doute les serveurs en http. Dans Chrome : cadenas à gauche de
+            l’adresse → Paramètres du site → Contenu non sécurisé → Autoriser, puis recharge la page.
+          </T>
+        )}
         {st.openIptvCut && (
           <T style={{ color: C.down, marginTop: 6 }}>
             Le serveur IPTV ne répond plus depuis {hhmm(st.openIptvCut.start)} alors qu’internet marche (fournisseur IPTV)

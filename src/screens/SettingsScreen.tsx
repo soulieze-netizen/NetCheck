@@ -105,7 +105,7 @@ export function SettingsScreen() {
           iptvOrigin(s.iptvUrl) ? (
             <T muted style={{ marginTop: 4 }}>
               Testé : {iptvOrigin(s.iptvUrl)}
-              {IS_WEB && iptvOrigin(s.iptvUrl).startsWith('http:') ? ' — impossible depuis le PC (le navigateur bloque les serveurs en http) : fais ce test sur le téléphone.' : ''}
+              {IS_WEB && iptvOrigin(s.iptvUrl).startsWith('http:') ? ' — sur PC, le navigateur bloque les serveurs en http : dans Chrome, cadenas → Paramètres du site → Contenu non sécurisé → Autoriser, puis recharge la page.' : ''}
             </T>
           ) : (
             <T style={{ color: C.down, marginTop: 4 }}>Adresse non reconnue.</T>

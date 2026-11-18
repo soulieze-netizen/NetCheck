@@ -59,7 +59,7 @@ export type EngineState = {
   lastSpeed: SpeedTest | null;
   nextSpeedAt: number | null;
   iptvUrl: string; // '' = pas de test IPTV
-  iptvBlocked: boolean; // PC + serveur en http : le navigateur interdit le test
+  iptvBlocked: boolean; // PC + serveur en http : aucune réponse depuis le début, le navigateur bloque sans doute le test
   iptvRecent: IptvSample[]; // 2 dernières minutes
   openIptvCut: Cut | null;
 };
@@ -87,6 +87,9 @@ class Engine {
   private iptvFails = 0;
   private iptvFailSince = 0;
   private openIptvCut: Cut | null = null;
+  // PC + serveur http : tant qu'aucune réponse n'est arrivée, on suppose que le navigateur bloque (contenu mixte) et on ne compte rien
+  private iptvSeenOk = false;
+  private iptvTried = 0;
   // Coupure en cours
   private downSince = 0;
   private downBox = false;
@@ -149,9 +152,12 @@ class Engine {
   private iptvUrl() {
     return iptvOrigin(this.settings?.iptvUrl ?? '');
   }
-  /** Une page web en https ne peut pas appeler un serveur en http (contenu mixte bloqué) */
-  private iptvBlocked() {
+  /** Page web en https + serveur en http : bloqué par défaut par le navigateur (« contenu non sécurisé » à autoriser) */
+  private iptvMixed() {
     return IS_WEB && this.iptvUrl().startsWith('http:');
+  }
+  private iptvBlocked() {
+    return this.iptvMixed() && !this.iptvSeenOk && this.iptvTried >= 3;
   }
 
   private emit() {
@@ -167,6 +173,8 @@ class Engine {
     if ('iptvUrl' in patch) {
       this.closeIptvCut(Date.now());
       this.iptvRecent = [];
+      this.iptvSeenOk = false;
+      this.iptvTried = 0;
     }
     this.emit();
   }
@@ -374,7 +382,7 @@ class Engine {
   // ---------- Serveur IPTV (toutes les 2 s, en parallèle des sondes internet) ----------
   private maybeIptv(now: number) {
     const url = this.iptvUrl();
-    if (!url || this.iptvBlocked() || this.iptvBusy || this.testing) return;
+    if (!url || this.iptvBusy || this.testing) return;
     if (now - this.iptvAt < IPTV_EVERY_MS) return;
     this.iptvAt = now;
     this.iptvBusy = true;
@@ -387,6 +395,12 @@ class Engine {
 
   private recordIptv(at: number, ms: number | null) {
     if (!this.running || this.testing || !this.day) return;
+    if (this.iptvMixed() && !this.iptvSeenOk) {
+      // Pas encore de réponse : peut-être bloqué par le navigateur, on ne compte pas d'échec
+      this.iptvTried++;
+      if (ms == null) return this.emit();
+      this.iptvSeenOk = true;
+    }
     this.iptvRecent.push({ at, ms });
     while (this.iptvRecent.length && this.iptvRecent[0].at < Date.now() - 120000) this.iptvRecent.shift();
     // Si internet est lui-même coupé, ce n'est pas la faute du serveur IPTV : on ne compte pas
