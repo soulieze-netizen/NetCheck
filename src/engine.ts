@@ -112,11 +112,20 @@ class Engine {
     this.emit();
   }
 
-  /** Recharge le jour courant (après effacement des données) */
+  /** Recharge le jour courant après effacement des données : on vide aussi tout ce qui est gardé en mémoire */
   async reload() {
     this.day = await loadDay(dayKey());
     this.minuteIdx = -1;
     this.lastSpeedAt = 0;
+    this.acc = newAcc();
+    this.recent = [];
+    this.last = null;
+    this.prevBest = this.prevBox = null;
+    this.downSince = 0;
+    this.openCut = null;
+    this.iptvRecent = [];
+    this.iptvFails = 0;
+    this.openIptvCut = null;
     this.emit();
   }
 
@@ -217,6 +226,7 @@ class Engine {
         probe(TARGETS.google),
         boxUrl ? probe(boxUrl, 1500) : Promise.resolve(undefined),
       ]);
+      if (!this.running) return; // arrêtée (ou données effacées) pendant la mesure
       const best = bestOf(cf, g);
       const up = best != null;
       let state: Sample['state'] = !up ? 'down' : best! > SLOW_MS ? 'slow' : 'ok';

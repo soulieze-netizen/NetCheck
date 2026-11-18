@@ -12,6 +12,8 @@ export const TARGETS = {
   google: 'https://www.google.com/generate_204',
 };
 const SPEED_HOST = 'https://speed.cloudflare.com';
+// Secours si Cloudflare refuse le test depuis le téléphone (erreur 403) : fichiers de test publics d'OVH (10 Mo / 100 Mo)
+const OVH = 'https://proof.ovh.net/files';
 
 let seq = 0;
 const bust = (url: string) => `${url}${url.includes('?') ? '&' : '?'}nc=${Date.now()}${seq++}`;
@@ -44,21 +46,37 @@ export async function probe(url: string, timeoutMs = 2000): Promise<number | nul
 
 // ---------------- Test de débit ----------------
 
-/** Téléphone : téléchargement de `bytes` octets dans un fichier temporaire, renvoie la durée en ms */
-async function downloadOnce(bytes: number): Promise<number> {
-  const url = bust(`${SPEED_HOST}/__down?bytes=${Math.round(bytes)}`);
-  const t0 = Date.now();
-  // Téléchargement natif (plus juste qu'en JavaScript)
+/** Téléphone : téléchargement natif (plus juste qu'en JavaScript) dans un fichier temporaire. Renvoie octets reçus et durée. */
+async function nativeDownload(url: string): Promise<{ bytes: number; ms: number }> {
   const { File, Paths } = require('expo-file-system') as typeof import('expo-file-system');
   const file = new File(Paths.cache, `speed_${Date.now()}_${seq++}.bin`);
+  const t0 = Date.now();
   try {
-    await File.downloadFileAsync(url, file);
-    return Date.now() - t0;
+    await File.downloadFileAsync(url, file, { idempotent: true });
+    const ms = Date.now() - t0;
+    return { bytes: file.size ?? 0, ms };
   } finally {
     try {
       if (file.exists) file.delete();
     } catch {}
   }
+}
+
+/** Cloudflare : `bytes` octets, renvoie la durée en ms */
+async function downloadOnce(bytes: number): Promise<number> {
+  return (await nativeDownload(bust(`${SPEED_HOST}/__down?bytes=${Math.round(bytes)}`))).ms;
+}
+
+/** Secours OVH : estimation sur 10 Mo, puis 4 téléchargements en parallèle (10 ou 100 Mo selon la vitesse) */
+async function ovhDownloadMbps(): Promise<number> {
+  const est = await nativeDownload(bust(`${OVH}/10Mb.dat`));
+  const name = mbps(est.bytes, est.ms) > 60 ? '100Mb.dat' : '10Mb.dat';
+  const t0 = Date.now();
+  const parts = await Promise.all(Array.from({ length: 4 }, () => nativeDownload(bust(`${OVH}/${name}`))));
+  return mbps(
+    parts.reduce((a, p) => a + p.bytes, 0),
+    Date.now() - t0
+  );
 }
 
 /**
@@ -112,6 +130,7 @@ async function uploadOnce(bytes: number): Promise<number> {
     await fetch(url, { method: 'POST', body, mode: 'no-cors', cache: 'no-store', headers: { 'Content-Type': 'text/plain' } });
   } else {
     const res = await expoFetch(url, { method: 'POST', body, headers: { 'Content-Type': 'text/plain' } });
+    if (res.status >= 400) throw new Error(`test montant refusé par Cloudflare (erreur ${res.status})`);
     try {
       res.body?.cancel();
     } catch {}
@@ -151,11 +170,18 @@ export async function speedTest(onStep?: (s: string) => void): Promise<SpeedResu
     if (IS_WEB) {
       out.down = Math.round((await webDownloadMbps()) * 10) / 10;
     } else {
-      // Essai : 2 Mo, pour estimer
-      const est = mbps(2e6, await downloadOnce(2e6));
-      const streams = 4;
-      const target = Math.min(Math.max((est * 1e6 * 4) / 8 / streams, 2e6), 125e6); // ~4 s, max 500 Mo au total
-      out.down = Math.round((await parallel(downloadOnce, streams, target)) * 10) / 10;
+      let down: number;
+      try {
+        // Essai : 2 Mo, pour estimer
+        const est = mbps(2e6, await downloadOnce(2e6));
+        const streams = 4;
+        const target = Math.min(Math.max((est * 1e6 * 4) / 8 / streams, 2e6), 125e6); // ~4 s, max 500 Mo au total
+        down = await parallel(downloadOnce, streams, target);
+      } catch {
+        onStep?.('Débit descendant (serveur de secours OVH)…');
+        down = await ovhDownloadMbps();
+      }
+      out.down = Math.round(down * 10) / 10;
     }
 
     onStep?.('Débit montant…');
