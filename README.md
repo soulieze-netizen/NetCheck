@@ -9,6 +9,10 @@ et **tests de débit** réguliers comparés aux vitesses du contrat. Rapport PDF
   - box OK mais internet muet → problème sur la ligne / le réseau VOO
   - tout répond mais > 300 ms → connexion lente
   - coupure = au moins 2 s sans internet ; 1 seule seconde = « perte »
+  - **gigue** (écart de temps de réponse d'une seconde à l'autre), vers internet et vers la box (= qualité du Wi-Fi)
+  - **pics** (temps de réponse ≥ 3× et +150 ms par rapport à la médiane de la minute précédente) et **requêtes perdues** hors coupures
+- **Toutes les 2 s (option)** : le serveur IPTV (adresse Xtream dans Réglages). S'il ne répond plus alors qu'internet marche → fournisseur IPTV.
+  Uniquement sur le téléphone si le serveur est en http (le navigateur du PC le bloque).
 - **Toutes les 15 / 30 / 60 min** : débit descendant, montant et ping (serveurs Cloudflare).
 - Frise minute par minute, bilans jour par jour, verdict, export PDF.
 

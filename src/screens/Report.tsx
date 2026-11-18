@@ -1,7 +1,7 @@
 // Écran « Rapport » : bilan sur plusieurs jours + export PDF (à envoyer à VOO).
 import React, { useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, summarize, verdict, type DaySummary } from '../analysis';
+import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, pct, summarize, verdict, type DaySummary } from '../analysis';
 import { IS_WEB } from '../net';
 import { listDays, loadDay, type Day, type Settings } from '../storage';
 import { Btn, Card, H, T } from '../ui';
@@ -75,6 +75,7 @@ export function ReportScreen() {
           <Text style={[styles.td, { flex: 2 }]}>Jour</Text>
           <Text style={styles.td}>Coupures</Text>
           <Text style={styles.td}>Sans net</Text>
+          <Text style={styles.td}>Gigue</Text>
           <Text style={styles.td}>⬇ moy.</Text>
           <Text style={styles.td}>⬇ soir</Text>
         </View>
@@ -85,6 +86,7 @@ export function ReportScreen() {
             </Text>
             <Text style={[styles.td, s.cuts ? { color: C.down } : null]}>{s.cuts}</Text>
             <Text style={styles.td}>{dur(s.downS)}</Text>
+            <Text style={[styles.td, (s.jitter ?? 0) >= 30 ? { color: C.down } : null]}>{s.jitter != null ? `${s.jitter} ms` : '—'}</Text>
             <Text style={[styles.td, under(s.avgDown, set) && { color: C.down }]}>{fmtMbps(s.avgDown)}</Text>
             <Text style={[styles.td, under(s.eveningDown, set) && { color: C.down }]}>{fmtMbps(s.eveningDown)}</Text>
           </View>
@@ -129,13 +131,15 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
     .map(
       (d) => `<tr><td>${esc(dayLabel(d.date))}</td><td>${dur(d.measuredS)}</td><td>${d.cuts} (${d.micro} &lt;10 s)</td><td>${dur(
         d.downS
-      )}</td><td>${d.uptime != null ? d.uptime.toFixed(2) : '—'} %</td><td>${d.avgLat ?? '—'} ms</td><td>${fmtMbps(d.avgDown)}</td><td>${fmtMbps(
+      )}</td><td>${d.uptime != null ? d.uptime.toFixed(2) : '—'} %</td><td>${d.avgLat ?? '—'} ms</td><td>${
+        d.jitter != null ? `${d.jitter} ms` : '—'
+      }</td><td>${pct(d.reqLossPct, 2)}</td><td>${d.iptvN ? `${d.iptvCuts} (${pct(d.iptvLossPct)})` : '—'}</td><td>${fmtMbps(d.avgDown)}</td><td>${fmtMbps(
         d.minDown
       )}</td><td>${d.underMin}/${d.speeds.filter((x) => x.down != null).length}</td></tr>`
     )
     .join('');
   const detail = days
-    .filter((d) => d.cuts.length || d.speeds.length)
+    .filter((d) => d.cuts.length || d.speeds.length || (d.iptvCuts ?? []).length)
     .map((d) => {
       const cuts = d.cuts
         .slice(-200)
@@ -144,8 +148,13 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
       const sp = d.speeds
         .map((t) => `<tr><td>${hhmm(t.at)}</td><td>${fmtMbps(t.down)}</td><td>${fmtMbps(t.up)}</td><td>${t.ping ?? '—'} ms</td><td>${t.error ? esc(t.error) : ''}</td></tr>`)
         .join('');
+      const iptv = (d.iptvCuts ?? [])
+        .slice(-200)
+        .map((c) => `<tr><td>${hhmmss(c.start)}</td><td>${dur(cutSeconds(c))}</td><td>serveur IPTV (internet OK)</td></tr>`)
+        .join('');
       return `<h3>${esc(dayLabel(d.date))}</h3>
       ${cuts ? `<table><tr><th>Début</th><th>Durée</th><th>Où</th></tr>${cuts}</table>` : '<p>Aucune coupure.</p>'}
+      ${iptv ? `<p>Décrochages du serveur IPTV :</p><table><tr><th>Début</th><th>Durée</th><th>Où</th></tr>${iptv}</table>` : ''}
       ${sp ? `<table><tr><th>Heure</th><th>Descendant</th><th>Montant</th><th>Ping</th><th></th></tr>${sp}</table>` : ''}`;
     })
     .join('');
@@ -156,10 +165,12 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
   <p>Opérateur : VOO · Appareil de mesure : ${esc(device)} · Édité le ${new Date().toLocaleString('fr-FR')}</p>
   <p>${esc(contract)}</p>
   <p>Méthode : contrôle chaque seconde de la box et de deux serveurs internet (Cloudflare 1.1.1.1, Google) ; coupure = au moins 2 s sans réponse d’internet.
+  Gigue = écart moyen du temps de réponse d’une seconde à l’autre ; pic = temps de réponse au moins 3 fois (et 150 ms) au-dessus de la médiane de la minute précédente ;
+  requêtes perdues = sondes sans réponse en 2 s, hors coupures.${s.iptvUrl ? ' Serveur IPTV testé toutes les 2 s, uniquement quand internet répond.' : ''}
   Test de débit (Cloudflare) toutes les ${s.speedEvery || '—'} min.</p>
   <h2>Bilan</h2><ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
   <h2>Jour par jour</h2>
-  <table><tr><th>Jour</th><th>Mesuré</th><th>Coupures</th><th>Sans internet</th><th>Disponibilité</th><th>Réponse moy.</th><th>⬇ moyen</th><th>⬇ minimum</th><th>Tests sous le min.</th></tr>${rows}</table>
+  <table><tr><th>Jour</th><th>Mesuré</th><th>Coupures</th><th>Sans internet</th><th>Disponibilité</th><th>Réponse moy.</th><th>Gigue</th><th>Requêtes perdues</th><th>IPTV décrochages</th><th>⬇ moyen</th><th>⬇ minimum</th><th>Tests sous le min.</th></tr>${rows}</table>
   <h2>Détail</h2>${detail}
   </body></html>`;
 }

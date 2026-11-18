@@ -1,7 +1,7 @@
 // Écran « Journée » : frise minute par minute, coupures et tests de débit d'un jour.
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, minuteColor, summarize } from '../analysis';
+import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, minuteColor, pct, summarize } from '../analysis';
 import { IS_WEB } from '../net';
 import { dayKey, listDays, loadDay, type Day } from '../storage';
 import { Btn, Card, H, T } from '../ui';
@@ -74,6 +74,12 @@ export function DayScreen() {
               {dur(sum.measuredS)} mesurées · {sum.losses} perte{sum.losses > 1 ? 's' : ''} d’1 s · {sum.slowMin} min lentes · réponse moyenne{' '}
               {sum.avgLat ?? '—'} ms
             </T>
+            {sum.jitter != null && (
+              <T muted>
+                Gigue moyenne {sum.jitter} ms{!IS_WEB && sum.boxJitter != null ? ` (jusqu’à la box ${sum.boxJitter} ms)` : ''} · {sum.spikes} pic
+                {sum.spikes > 1 ? 's' : ''} de temps de réponse · {pct(sum.reqLossPct, 2)} de requêtes perdues
+              </T>
+            )}
           </>
         ) : (
           <T muted>Aucune mesure ce jour-là.</T>
@@ -93,6 +99,23 @@ export function DayScreen() {
           </View>
         ))}
       </Card>
+
+      {sum.iptvN > 0 || (day.iptvCuts ?? []).length > 0 ? (
+        <Card>
+          <H>📺 Serveur IPTV ({(day.iptvCuts ?? []).length} décrochage{(day.iptvCuts ?? []).length > 1 ? 's' : ''})</H>
+          <T muted>
+            {sum.iptvN} tests · {pct(sum.iptvLossPct)} sans réponse · {sum.iptvAvgLat ?? '—'} ms en moyenne. Seuls les moments où internet marchait
+            sont comptés : un décrochage ici vient du fournisseur IPTV.
+          </T>
+          {[...(day.iptvCuts ?? [])].reverse().map((c) => (
+            <View key={c.start} style={styles.line}>
+              <Text style={styles.time}>{hhmmss(c.start)}</Text>
+              <T style={{ flex: 1 }}>{dur(cutSeconds(c))}</T>
+              <Text style={{ color: C.down, fontWeight: '700' }}>IPTV</Text>
+            </View>
+          ))}
+        </Card>
+      ) : null}
 
       <Card>
         <H>Tests de débit ({day.speeds.length})</H>

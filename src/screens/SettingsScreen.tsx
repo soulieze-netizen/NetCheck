@@ -4,7 +4,7 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { C } from '../analysis';
 import { engine } from '../engine';
 import { IS_WEB } from '../net';
-import { clearAllDays, type Settings } from '../storage';
+import { clearAllDays, iptvOrigin, type Settings } from '../storage';
 import { Btn, Card, H, T } from '../ui';
 import { useEngine } from './Live';
 
@@ -85,13 +85,43 @@ export function SettingsScreen() {
       </Card>
 
       <Card>
+        <H>📺 Serveur IPTV</H>
+        <T muted>
+          Colle l’adresse du serveur de ton code Xtream (ex. http://monserveur.com:8080). NetCheck le teste toutes les 2 s : s’il ne répond plus alors
+          qu’internet marche, c’est le fournisseur IPTV qui coupe, pas VOO. Seuls l’adresse et le port sont gardés, jamais ton identifiant ni ton mot de
+          passe.
+        </T>
+        <TextInput
+          value={s.iptvUrl}
+          onChangeText={(t) => engine.updateSettings({ iptvUrl: t.trim() })}
+          placeholder="http://serveur:port (vide = pas de test)"
+          placeholderTextColor={C.muted}
+          style={styles.input}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        {s.iptvUrl ? (
+          iptvOrigin(s.iptvUrl) ? (
+            <T muted style={{ marginTop: 4 }}>
+              Testé : {iptvOrigin(s.iptvUrl)}
+              {IS_WEB && iptvOrigin(s.iptvUrl).startsWith('http:') ? ' — impossible depuis le PC (le navigateur bloque les serveurs en http) : fais ce test sur le téléphone.' : ''}
+            </T>
+          ) : (
+            <T style={{ color: C.down, marginTop: 4 }}>Adresse non reconnue.</T>
+          )
+        ) : null}
+      </Card>
+
+      <Card>
         <H>Comment bien mesurer</H>
         <T muted>
           • Sur le PC : branche-le en câble à la box, ouvre NetCheck dans le navigateur, lance la surveillance et laisse l’onglet ouvert. Dans
           Windows, mets « Mise en veille : Jamais » (Paramètres → Système → Alimentation).{'\n'}• Sur le téléphone : la surveillance continue écran
           éteint (notification « NetCheck surveille »). Si Android la coupe, autorise NetCheck à fonctionner sans restriction de batterie.{'\n'}• Les
           heures qui comptent le plus : 19h-21h, plusieurs jours de suite.{'\n'}• Comparer PC (câble) et téléphone (Wi-Fi) dit si c’est la ligne VOO ou ton
-          Wi-Fi.
+          Wi-Fi.{'\n'}• Si c’est le Chromecast qui coupe : pose le téléphone à côté de lui, connecté au même répéteur, pour mesurer ce que vit le
+          Chromecast.
         </T>
       </Card>
 

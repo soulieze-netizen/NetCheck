@@ -10,6 +10,7 @@ import {
   loadSettings,
   saveDay,
   saveSettings,
+  iptvOrigin,
   type Cut,
   type Day,
   type MinuteStat,
@@ -19,6 +20,19 @@ import {
 
 export const SLOW_MS = 300; // au-delà : connexion lente
 const MIN_CUT_S = 2; // coupure = au moins 2 secondes sans internet (1 seule = « perte »)
+// Pic = temps de réponse anormal par rapport à l'habitude (médiane des 60 dernières secondes)
+const SPIKE_FACTOR = 3;
+const SPIKE_MIN_MS = 150;
+const IPTV_EVERY_MS = 2000; // serveur IPTV testé toutes les 2 s (assez pour voir un décrochage, sans le harceler)
+const IPTV_TIMEOUT_MS = 3000;
+const IPTV_MIN_CUT = 2; // décrochage IPTV = au moins 2 sondes de suite sans réponse alors qu'internet marche
+
+const bestOf = (cf: number | null, g: number | null) => (cf == null ? g : g == null ? cf : Math.min(cf, g));
+const median = (xs: number[]) => {
+  if (!xs.length) return null;
+  const a = [...xs].sort((x, y) => x - y);
+  return a[Math.floor(a.length / 2)];
+};
 
 export type Sample = {
   at: number;
@@ -26,7 +40,11 @@ export type Sample = {
   g: number | null;
   box: number | null | undefined; // undefined = non mesurée (PC, 4G)
   state: 'ok' | 'slow' | 'down' | 'test';
+  spike?: boolean; // temps de réponse anormalement haut par rapport à l'habitude
 };
+
+/** Dernière sonde du serveur IPTV */
+export type IptvSample = { at: number; ms: number | null };
 
 export type EngineState = {
   running: boolean;
@@ -40,6 +58,10 @@ export type EngineState = {
   netType: string;
   lastSpeed: SpeedTest | null;
   nextSpeedAt: number | null;
+  iptvUrl: string; // '' = pas de test IPTV
+  iptvBlocked: boolean; // PC + serveur en http : le navigateur interdit le test
+  iptvRecent: IptvSample[]; // 2 dernières minutes
+  openIptvCut: Cut | null;
 };
 
 type Listener = (s: EngineState) => void;
@@ -55,7 +77,16 @@ class Engine {
   private last: Sample | null = null;
   // Minute en cours
   private minuteIdx = -1;
-  private acc = { n: 0, down: 0, box: 0, slow: 0, latSum: 0, latN: 0, max: 0, loss: 0 };
+  private acc = newAcc();
+  private prevBest: number | null = null;
+  private prevBox: number | null = null;
+  // Serveur IPTV
+  private iptvBusy = false;
+  private iptvAt = 0;
+  private iptvRecent: IptvSample[] = [];
+  private iptvFails = 0;
+  private iptvFailSince = 0;
+  private openIptvCut: Cut | null = null;
   // Coupure en cours
   private downSince = 0;
   private downBox = false;
@@ -108,7 +139,19 @@ class Engine {
       netType: this.netType,
       lastSpeed: this.day?.speeds[this.day.speeds.length - 1] ?? null,
       nextSpeedAt: this.running && every > 0 ? Math.max(Date.now(), this.lastSpeedAt + every * 60000) : null,
+      iptvUrl: this.iptvUrl(),
+      iptvBlocked: this.iptvBlocked(),
+      iptvRecent: this.iptvRecent,
+      openIptvCut: this.openIptvCut,
     };
+  }
+
+  private iptvUrl() {
+    return iptvOrigin(this.settings?.iptvUrl ?? '');
+  }
+  /** Une page web en https ne peut pas appeler un serveur en http (contenu mixte bloqué) */
+  private iptvBlocked() {
+    return IS_WEB && this.iptvUrl().startsWith('http:');
   }
 
   private emit() {
@@ -121,6 +164,10 @@ class Engine {
     this.settings = { ...this.settings!, ...patch };
     saveSettings(this.settings);
     if ('boxIp' in patch) this.boxCheckedAt = 0;
+    if ('iptvUrl' in patch) {
+      this.closeIptvCut(Date.now());
+      this.iptvRecent = [];
+    }
     this.emit();
   }
 
@@ -140,6 +187,7 @@ class Engine {
     this.ticker?.stop();
     this.ticker = null;
     this.closeCut(Date.now());
+    this.closeIptvCut(Date.now());
     this.flushMinute();
     if (this.day) await saveDay(this.day);
     this.updateSettings({ running: false });
@@ -161,15 +209,21 @@ class Engine {
         probe(TARGETS.google),
         boxUrl ? probe(boxUrl, 1500) : Promise.resolve(undefined),
       ]);
-      const best = cf == null ? g : g == null ? cf : Math.min(cf, g);
+      const best = bestOf(cf, g);
       const up = best != null;
       let state: Sample['state'] = !up ? 'down' : best! > SLOW_MS ? 'slow' : 'ok';
       if (this.testing) state = 'test'; // pendant le test de débit la ligne est volontairement saturée
       const s: Sample = { at: now, cf, g, box, state };
+      if (up && state !== 'test') {
+        const base = median(this.recent.slice(-60).filter((x) => x.state === 'ok' || x.state === 'slow').map((x) => bestOf(x.cf, x.g)!));
+        if (base != null && best! >= Math.max(base * SPIKE_FACTOR, base + SPIKE_MIN_MS)) s.spike = true;
+      }
       this.last = s;
       this.recent.push(s);
       if (this.recent.length > 120) this.recent.shift();
       if (state !== 'test') this.record(s);
+      else this.prevBest = this.prevBox = null; // pas de gigue calculée à travers un test de débit
+      this.maybeIptv(now);
       this.maybeSpeedTest(now, up);
       this.notify(false);
       this.emit();
@@ -212,8 +266,26 @@ class Engine {
     else if (this.acc.n >= 15) this.flushMinute();
     const a = this.acc;
     a.n++;
-    const best = s.cf == null ? s.g : s.g == null ? s.cf : Math.min(s.cf, s.g);
+    const best = bestOf(s.cf, s.g);
     if (s.box === null) a.box++;
+    // Gigue = écart de temps de réponse d'une seconde à l'autre
+    if (best != null && this.prevBest != null) {
+      a.jitSum += Math.abs(best - this.prevBest);
+      a.jitN++;
+    }
+    this.prevBest = best;
+    const boxMs = typeof s.box === 'number' ? s.box : null;
+    if (boxMs != null && this.prevBox != null) {
+      a.boxJitSum += Math.abs(boxMs - this.prevBox);
+      a.boxJitN++;
+    }
+    this.prevBox = boxMs;
+    if (s.spike) a.spikes++;
+    // Requêtes perdues : hors coupures (une coupure est déjà comptée à part)
+    if (s.state !== 'down') {
+      a.reqN += 2;
+      a.reqLost += (s.cf == null ? 1 : 0) + (s.g == null ? 1 : 0);
+    }
     if (s.state === 'down') {
       a.down++;
       if (!this.downSince) {
@@ -257,32 +329,98 @@ class Engine {
     const a = this.acc;
     if (this.minuteIdx >= 0 && a.n > 0 && this.day) {
       const prev = this.day.minutes[this.minuteIdx];
-      const cur: MinuteStat = [a.n, a.down, a.box, a.slow, a.latN ? Math.round(a.latSum / a.latN) : 0, a.max, a.loss];
+      const cur: MinuteStat = [
+        a.n,
+        a.down,
+        a.box,
+        a.slow,
+        a.latN ? Math.round(a.latSum / a.latN) : 0,
+        a.max,
+        a.loss,
+        a.jitSum,
+        a.jitN,
+        a.spikes,
+        a.reqN,
+        a.reqLost,
+        a.boxJitSum,
+        a.boxJitN,
+        a.iptvN,
+        a.iptvLost,
+        a.iptvLatSum,
+      ];
       // Même minute déjà partiellement remplie (redémarrage) : on additionne
-      this.day.minutes[this.minuteIdx] = prev
-        ? [
-            prev[0] + cur[0],
-            prev[1] + cur[1],
-            prev[2] + cur[2],
-            prev[3] + cur[3],
-            weighted(prev[4], prev[0] - prev[1], cur[4], cur[0] - cur[1]),
-            Math.max(prev[5], cur[5]),
-            prev[6] + cur[6],
-          ]
-        : cur;
+      if (prev) {
+        const merged = cur.map((v, i) => (v as number) + ((prev[i] as number | undefined) ?? 0)) as MinuteStat;
+        merged[4] = weighted(prev[4], prev[0] - prev[1], cur[4], cur[0] - cur[1]);
+        merged[5] = Math.max(prev[5], cur[5]);
+        this.day.minutes[this.minuteIdx] = merged;
+      } else this.day.minutes[this.minuteIdx] = cur;
       saveDay(this.day);
     }
-    this.acc = { n: 0, down: 0, box: 0, slow: 0, latSum: 0, latN: 0, max: 0, loss: 0 };
+    this.acc = newAcc();
   }
 
   private async rollDay(now: number) {
     const key = dayKey(new Date(now));
     if (this.day && this.day.date === key) return;
     this.closeCut(now);
+    this.closeIptvCut(now);
     this.flushMinute();
     this.minuteIdx = -1;
     if (this.day) await saveDay(this.day);
     this.day = await loadDay(key);
+  }
+
+  // ---------- Serveur IPTV (toutes les 2 s, en parallèle des sondes internet) ----------
+  private maybeIptv(now: number) {
+    const url = this.iptvUrl();
+    if (!url || this.iptvBlocked() || this.iptvBusy || this.testing) return;
+    if (now - this.iptvAt < IPTV_EVERY_MS) return;
+    this.iptvAt = now;
+    this.iptvBusy = true;
+    probe(`${url}/`, IPTV_TIMEOUT_MS)
+      .then((ms) => this.recordIptv(now, ms))
+      .finally(() => {
+        this.iptvBusy = false;
+      });
+  }
+
+  private recordIptv(at: number, ms: number | null) {
+    if (!this.running || this.testing || !this.day) return;
+    this.iptvRecent.push({ at, ms });
+    while (this.iptvRecent.length && this.iptvRecent[0].at < Date.now() - 120000) this.iptvRecent.shift();
+    // Si internet est lui-même coupé, ce n'est pas la faute du serveur IPTV : on ne compte pas
+    if (this.last?.state === 'down' || this.openCut) {
+      this.iptvFails = 0;
+      this.closeIptvCut(at);
+      return;
+    }
+    const a = this.acc;
+    a.iptvN++;
+    if (ms == null) {
+      a.iptvLost++;
+      if (!this.iptvFails) this.iptvFailSince = at;
+      this.iptvFails++;
+      if (!this.openIptvCut && this.iptvFails >= IPTV_MIN_CUT) {
+        this.openIptvCut = { start: this.iptvFailSince, end: at + IPTV_EVERY_MS, where: '?' };
+        (this.day.iptvCuts ??= []).push(this.openIptvCut);
+      }
+      if (this.openIptvCut) this.openIptvCut.end = at + IPTV_EVERY_MS;
+    } else {
+      a.iptvLatSum += ms;
+      this.iptvFails = 0;
+      this.closeIptvCut(at);
+    }
+    this.emit();
+  }
+
+  private closeIptvCut(at: number) {
+    if (this.openIptvCut) {
+      this.openIptvCut.end = at;
+      this.openIptvCut = null;
+      if (this.day) saveDay(this.day);
+    }
+    this.iptvFails = 0;
   }
 
   // ---------- Test de débit ----------
@@ -327,6 +465,29 @@ class Engine {
       text: `Aujourd'hui : ${cuts} coupure${cuts > 1 ? 's' : ''}${sp?.down != null ? ` · dernier débit ${Math.round(sp.down)} Mb/s` : ''}`,
     });
   }
+}
+
+function newAcc() {
+  return {
+    n: 0,
+    down: 0,
+    box: 0,
+    slow: 0,
+    latSum: 0,
+    latN: 0,
+    max: 0,
+    loss: 0,
+    jitSum: 0,
+    jitN: 0,
+    spikes: 0,
+    reqN: 0,
+    reqLost: 0,
+    boxJitSum: 0,
+    boxJitN: 0,
+    iptvN: 0,
+    iptvLost: 0,
+    iptvLatSum: 0,
+  };
 }
 
 /** Moyenne de deux latences moyennes, pondérée par le nombre de secondes avec réponse */

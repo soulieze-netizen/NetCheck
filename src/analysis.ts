@@ -1,5 +1,5 @@
 // Calculs des bilans (jour, plusieurs jours) et verdict en clair.
-import type { Cut, Day, Settings, SpeedTest } from './storage';
+import { M, mv, type Cut, type Day, type Settings, type SpeedTest } from './storage';
 
 export const C = {
   bg: '#0B0F1A',
@@ -72,7 +72,57 @@ export type DaySummary = {
   avgUp: number | null;
   underMin: number; // tests sous le minimum du contrat
   eveningDown: number | null; // moyenne 19h-21h
+  // Stabilité
+  jitter: number | null; // gigue internet moyenne (ms)
+  boxJitter: number | null; // gigue entre l'appareil et la box (ms) : élevée = Wi-Fi instable
+  spikes: number; // pics de temps de réponse
+  reqLossPct: number | null; // % de requêtes perdues hors coupures
+  // Serveur IPTV
+  iptvN: number;
+  iptvLossPct: number | null;
+  iptvAvgLat: number | null;
+  iptvCuts: number;
+  iptvDownS: number;
+  iptvLongest: number;
 };
+
+/** Gigue et pertes calculées sur une liste de minutes */
+export function stability(minutes: Day['minutes']) {
+  let jitS = 0,
+    jitN = 0,
+    bjS = 0,
+    bjN = 0,
+    spikes = 0,
+    reqN = 0,
+    reqLost = 0,
+    iN = 0,
+    iLost = 0,
+    iLat = 0;
+  for (const m of minutes) {
+    if (!m) continue;
+    jitS += mv(m, M.jitSum);
+    jitN += mv(m, M.jitN);
+    bjS += mv(m, M.boxJitSum);
+    bjN += mv(m, M.boxJitN);
+    spikes += mv(m, M.spikes);
+    reqN += mv(m, M.reqN);
+    reqLost += mv(m, M.reqLost);
+    iN += mv(m, M.iptvN);
+    iLost += mv(m, M.iptvLost);
+    iLat += mv(m, M.iptvLatSum);
+  }
+  return {
+    jitter: jitN ? Math.round(jitS / jitN) : null,
+    boxJitter: bjN ? Math.round(bjS / bjN) : null,
+    spikes,
+    reqLossPct: reqN ? (100 * reqLost) / reqN : null,
+    iptvN: iN,
+    iptvLossPct: iN ? (100 * iLost) / iN : null,
+    iptvAvgLat: iN > iLost ? Math.round(iLat / (iN - iLost)) : null,
+  };
+}
+
+export const pct = (v: number | null | undefined, digits = 1) => (v == null ? '—' : `${v.toFixed(digits).replace('.', ',')} %`);
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
@@ -123,6 +173,10 @@ export function summarize(day: Day, s: Settings): DaySummary {
     avgUp: avg(ok.filter((x) => x.up != null).map((x) => x.up!)),
     underMin: s.downMin ? downs.filter((d) => d < s.downMin).length : 0,
     eveningDown: avg(evening.map((x) => x.down!)),
+    ...stability(day.minutes),
+    iptvCuts: (day.iptvCuts ?? []).length,
+    iptvDownS: (day.iptvCuts ?? []).reduce((a, c) => a + cutSeconds(c), 0),
+    iptvLongest: Math.max(0, ...(day.iptvCuts ?? []).map(cutSeconds)),
   };
 }
 
@@ -147,6 +201,57 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
     else if (box >= line * 2 && box > 0) out.push(`La box elle-même ne répondait plus dans ${box} coupure(s) sur ${cuts} : problème de Wi-Fi (distance, interférences) ou de box qui redémarre.`);
     else if (box + line > 0) out.push(`Mélange : ${line} coupure(s) côté VOO, ${box} côté Wi-Fi / box.`);
   }
+  // Stabilité : ce qui fait saccader la vidéo sans vraie coupure
+  const wavg = (f: (d: DaySummary) => number | null) => {
+    let sum = 0,
+      w = 0;
+    for (const d of list) {
+      const v = f(d);
+      if (v != null) {
+        sum += v * d.measuredS;
+        w += d.measuredS;
+      }
+    }
+    return w ? sum / w : null;
+  };
+  const jit = wavg((d) => d.jitter);
+  const bjit = wavg((d) => d.boxJitter);
+  const loss = wavg((d) => d.reqLossPct);
+  const spikes = list.reduce((a, d) => a + d.spikes, 0);
+  const spikesH = spikes / Math.max(hours, 1);
+  if (jit != null) {
+    const facts = `gigue moyenne ${Math.round(jit)} ms, ${spikes} pic${spikes > 1 ? 's' : ''} de temps de réponse (${spikesH
+      .toFixed(1)
+      .replace('.', ',')} par heure), ${pct(loss, 2)} de requêtes perdues hors coupures`;
+    const unstable = jit >= 30 || spikesH >= 20 || (loss ?? 0) >= 1;
+    if (unstable) {
+      out.push(`Connexion instable : ${facts}. De quoi faire saccader ou couper une vidéo sans que ce soit une vraie coupure.`);
+      if (!isPc && bjit != null) {
+        if (bjit >= 15 && bjit >= jit * 0.5)
+          out.push(`L’instabilité existe déjà entre l’appareil et la box (gigue box ${Math.round(bjit)} ms) : c’est le Wi-Fi ou le répéteur qui est en cause.`);
+        else if (bjit < 10)
+          out.push(`La box, elle, répond de façon régulière (gigue box ${Math.round(bjit)} ms) : l’instabilité vient d’après la box, donc de la ligne / du réseau VOO.`);
+      }
+    } else out.push(`Connexion stable : ${facts}.`);
+  }
+
+  // Serveur IPTV
+  const iN = list.reduce((a, d) => a + d.iptvN, 0);
+  if (iN) {
+    const iCuts = list.reduce((a, d) => a + d.iptvCuts, 0);
+    const iDown = list.reduce((a, d) => a + d.iptvDownS, 0);
+    const iLoss = wavg((d) => d.iptvLossPct);
+    const iLat = wavg((d) => d.iptvAvgLat);
+    if (iCuts || (iLoss ?? 0) >= 2)
+      out.push(
+        `Serveur IPTV : ${iCuts} décrochage${iCuts > 1 ? 's' : ''} (${dur(iDown)} au total) et ${pct(iLoss)} de tests sans réponse, alors qu’internet marchait. Ces coupures-là viennent du fournisseur IPTV, pas de VOO.`
+      );
+    else
+      out.push(
+        `Serveur IPTV : il a toujours répondu (${pct(iLoss)} d’échecs, ${iLat != null ? Math.round(iLat) : '—'} ms en moyenne). Si l’image coupe quand même, regarde plutôt le Wi-Fi du Chromecast.`
+      );
+  }
+
   const allSpeeds = list.flatMap((d) => d.speeds.filter((x) => x.down != null));
   if (allSpeeds.length) {
     const downs = allSpeeds.map((x) => x.down!);

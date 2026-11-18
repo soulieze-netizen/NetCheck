@@ -1,7 +1,7 @@
 // Écran « Direct » : état de la connexion à la seconde près.
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dur, fmtMbps, hhmm, summarize } from '../analysis';
+import { C, cutSeconds, dur, fmtMbps, hhmm, pct, summarize } from '../analysis';
 import { engine, SLOW_MS, type EngineState, type Sample } from '../engine';
 import { IS_WEB } from '../net';
 import { Btn, Card, H, T } from '../ui';
@@ -35,6 +35,7 @@ export function LiveScreen() {
   }[state];
   const sp = st.lastSpeed;
   const set = st.settings;
+  const lastIptv = st.iptvRecent[st.iptvRecent.length - 1];
 
   return (
     <ScrollView contentContainerStyle={{ padding: 14 }}>
@@ -50,7 +51,19 @@ export function LiveScreen() {
           <Row label={`🏠 Box${st.boxIp ? ` (${st.boxIp})` : ''}`} value={IS_WEB ? 'non mesurée sur PC' : ms(s?.box)} color={msColor(s?.box)} />
           <Row label="🌐 Cloudflare" value={ms(s?.cf)} color={msColor(s?.cf)} />
           <Row label="🌐 Google" value={ms(s?.g)} color={msColor(s?.g)} />
+          {st.iptvUrl ? (
+            <Row
+              label="📺 Serveur IPTV"
+              value={st.iptvBlocked ? 'non testable sur PC (http)' : !st.running || !lastIptv ? '—' : ms(lastIptv.ms)}
+              color={st.iptvBlocked || !lastIptv ? C.muted : msColor(lastIptv.ms)}
+            />
+          ) : null}
         </View>
+        {st.openIptvCut && (
+          <T style={{ color: C.down, marginTop: 6 }}>
+            Le serveur IPTV ne répond plus depuis {hhmm(st.openIptvCut.start)} alors qu’internet marche (fournisseur IPTV)
+          </T>
+        )}
         <Spark samples={st.recent} />
         <T muted>Les 2 dernières minutes, une barre par seconde (hauteur = temps de réponse).</T>
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
@@ -67,6 +80,8 @@ export function LiveScreen() {
           </T>
         )}
       </Card>
+
+      {st.running && <Stability st={st} />}
 
       <Card>
         <H>Aujourd’hui</H>
@@ -86,6 +101,18 @@ export function LiveScreen() {
               Disponibilité {sum.uptime!.toFixed(2).replace('.', ',')} % sur {dur(sum.measuredS)} mesurées · {sum.losses} perte
               {sum.losses > 1 ? 's' : ''} d’1 s · temps de réponse moyen {sum.avgLat ?? '—'} ms
             </T>
+            {sum.jitter != null && (
+              <T muted>
+                Gigue moyenne {sum.jitter} ms{!IS_WEB && sum.boxJitter != null ? ` (box ${sum.boxJitter} ms)` : ''} · {sum.spikes} pic
+                {sum.spikes > 1 ? 's' : ''} · {pct(sum.reqLossPct, 2)} de requêtes perdues
+              </T>
+            )}
+            {sum.iptvN > 0 && (
+              <T muted>
+                📺 Serveur IPTV : {sum.iptvCuts} décrochage{sum.iptvCuts > 1 ? 's' : ''}
+                {sum.iptvCuts ? ` (plus long ${dur(sum.iptvLongest)})` : ''} · {pct(sum.iptvLossPct)} sans réponse · {sum.iptvAvgLat ?? '—'} ms
+              </T>
+            )}
           </>
         ) : (
           <T muted>Pas encore de mesure aujourd’hui.</T>
@@ -122,6 +149,53 @@ export function LiveScreen() {
   );
 }
 
+/** Stabilité sur les 2 dernières minutes : gigue, pics, pertes, IPTV */
+function Stability({ st }: { st: EngineState }) {
+  const xs = st.recent.filter((x) => x.state !== 'test');
+  const jit = (vals: (number | null | undefined)[]) => {
+    let sum = 0,
+      n = 0;
+    for (let i = 1; i < vals.length; i++) {
+      const a = vals[i - 1],
+        b = vals[i];
+      if (typeof a === 'number' && typeof b === 'number') {
+        sum += Math.abs(b - a);
+        n++;
+      }
+    }
+    return n ? Math.round(sum / n) : null;
+  };
+  const bestOf = (x: Sample) => (x.cf == null ? x.g : x.g == null ? x.cf : Math.min(x.cf, x.g));
+  const j = jit(xs.map(bestOf));
+  const bj = IS_WEB ? null : jit(xs.map((x) => x.box));
+  const spikes = xs.filter((x) => x.spike).length;
+  const up = xs.filter((x) => x.state !== 'down');
+  const req = up.length * 2;
+  const lost = up.reduce((a, x) => a + (x.cf == null ? 1 : 0) + (x.g == null ? 1 : 0), 0);
+  const lossPct = req ? (100 * lost) / req : null;
+  const ip = st.iptvRecent;
+  const ipLost = ip.filter((x) => x.ms == null).length;
+  const level = (v: number | null, warn: number, bad: number) => (v == null ? C.muted : v >= bad ? C.down : v >= warn ? C.slow : C.ok);
+  return (
+    <Card>
+      <H>Stabilité (2 dernières min)</H>
+      <View style={{ gap: 4 }}>
+        <Row label="Gigue internet" value={j == null ? '—' : `${j} ms`} color={level(j, 15, 30)} />
+        {!IS_WEB && <Row label="Gigue jusqu’à la box (Wi-Fi)" value={bj == null ? '—' : `${bj} ms`} color={level(bj, 10, 20)} />}
+        <Row label="Pics de temps de réponse" value={String(spikes)} color={level(spikes, 2, 6)} />
+        <Row label="Requêtes perdues" value={pct(lossPct)} color={level(lossPct, 0.5, 2)} />
+        {st.iptvUrl && !st.iptvBlocked ? (
+          <Row label="📺 IPTV sans réponse" value={ip.length ? `${ipLost} / ${ip.length}` : '—'} color={level(ip.length ? ipLost : null, 1, 2)} />
+        ) : null}
+      </View>
+      <T muted style={{ marginTop: 6 }}>
+        La gigue, c’est l’irrégularité du temps de réponse d’une seconde à l’autre. Au-delà de ~30 ms, une vidéo en direct peut saccader ou couper
+        sans que la connexion soit vraiment tombée.
+      </T>
+    </Card>
+  );
+}
+
 function Row({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
@@ -152,7 +226,8 @@ function Spark({ samples }: { samples: Sample[] }) {
       {samples.map((s) => {
         const best = s.cf == null ? s.g : s.g == null ? s.cf : Math.min(s.cf, s.g);
         const h = s.state === 'down' ? 100 : best == null ? 0 : Math.min(100, 8 + (best / 600) * 92);
-        const color = s.state === 'down' ? (s.box === null ? C.box : C.down) : s.state === 'slow' ? C.slow : s.state === 'test' ? C.accent : C.ok;
+        const color =
+          s.state === 'down' ? (s.box === null ? C.box : C.down) : s.state === 'slow' || s.spike ? C.slow : s.state === 'test' ? C.accent : C.ok;
         return <View key={s.at} style={[styles.sparkBar, { height: `${h}%`, backgroundColor: color }]} />;
       })}
     </View>

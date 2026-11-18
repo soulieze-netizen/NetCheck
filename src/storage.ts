@@ -17,6 +17,8 @@ export type Settings = {
   running: boolean;
   /** Nom de l'appareil dans les rapports (« Téléphone Wi-Fi », « PC câble »…) */
   deviceLabel: string;
+  /** Serveur IPTV à surveiller (ex. http://monserveur.com:8080), vide = pas de test */
+  iptvUrl: string;
 };
 
 export const defaultSettings: Settings = {
@@ -30,10 +32,37 @@ export const defaultSettings: Settings = {
   boxIp: '',
   running: false,
   deviceLabel: '',
+  iptvUrl: '',
 };
 
-/** Une minute : [mesures, s. internet coupé, s. box injoignable, s. lentes, latence moy. ms, latence max ms, pertes isolées] */
-export type MinuteStat = [number, number, number, number, number, number, number];
+/**
+ * Une minute : [mesures, s. internet coupé, s. box injoignable, s. lentes, latence moy. ms, latence max ms, pertes isolées,
+ *  gigue internet (somme ms), gigue internet (nb), pics, requêtes internet envoyées, requêtes perdues,
+ *  gigue box (somme ms), gigue box (nb), sondes IPTV, sondes IPTV sans réponse, latence IPTV (somme ms des réponses)]
+ * Les 10 derniers champs n'existent pas dans les mesures d'avant le 18/11/2026 (lire avec ?? 0).
+ */
+export type MinuteStat = [
+  n: number,
+  down: number,
+  box: number,
+  slow: number,
+  lat: number,
+  max: number,
+  loss: number,
+  jitSum?: number,
+  jitN?: number,
+  spikes?: number,
+  reqN?: number,
+  reqLost?: number,
+  boxJitSum?: number,
+  boxJitN?: number,
+  iptvN?: number,
+  iptvLost?: number,
+  iptvLatSum?: number,
+];
+/** Index des champs ajoutés (gigue, pertes, IPTV) */
+export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16 } as const;
+export const mv = (m: MinuteStat, i: number) => (m[i] as number | undefined) ?? 0;
 
 export type Cut = {
   start: number; // ms
@@ -55,6 +84,8 @@ export type Day = {
   minutes: (MinuteStat | null)[]; // 1440
   cuts: Cut[];
   speeds: SpeedTest[];
+  /** Décrochages du serveur IPTV pendant qu'internet marchait */
+  iptvCuts?: Cut[];
 };
 
 export function dayKey(d = new Date()) {
@@ -107,4 +138,11 @@ export async function listDays(): Promise<string[]> {
 export async function clearAllDays() {
   const keys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith('day:'));
   await AsyncStorage.multiRemove(keys);
+}
+
+/** Adresse du serveur IPTV réduite à « http://hôte:port » : on ne garde jamais l'identifiant ni le mot de passe du code Xtream */
+export function iptvOrigin(text: string): string {
+  const m = text.trim().match(/^(https?:\/\/)?([^\/?#\s]+)/i);
+  if (!m || !m[2].includes('.')) return '';
+  return `${(m[1] || 'http://').toLowerCase()}${m[2].replace(/^.*@/, '')}`;
 }
