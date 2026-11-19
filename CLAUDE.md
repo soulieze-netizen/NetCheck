@@ -24,6 +24,10 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
 - Wi-Fi (Android, toutes les 5 s, `maybeWifi`) : signal, vitesse de liaison, BSSID → `day.aps` (A, B, C…), `day.wifiEvents` (roam / lost / back).
   BSSID = permission position + localisation activée, sinon bascule détectée seulement par changement de bande.
 - « ⚠️ Ça vient de couper » (`engine.mark`) : résumé des 2 min d'avant dans `day.marks`, causes via `markCauses` (analysis.ts).
+- Liaison téléphone ↔ Chromecast par ntfy.sh (src/remote.ts, réglages `ntfyTopic` + `alertsOn`, oui par défaut sur la télé) :
+  l'appareil `alertsOn` publie les alertes sur `<canal>` (au plus 1 notification/min, regroupées : coupure, bascule/perte Wi-Fi,
+  IPTV sans réponse, résultat d'un signalement) et lit `<canal>-cmd` toutes les 10 s (limite de requêtes ntfy.sh) ; le téléphone
+  (« 📺 Ça coupe sur la télé ») publie `mark` sur `<canal>-cmd` → `engine.mark(heure de l'appui, true)`. Historique gardé 3 min pour ça.
 - Serveurs IPTV (réglages `iptvUrl` et `iptvUrl2`, réduits à l'origine par `iptvOrigin`, jamais les identifiants) : un `IptvMonitor` par serveur,
   sondé toutes les 2 s hors du tick (ne le bloque pas), compté seulement si internet répond ; ≥ 2 échecs de suite = `day.iptvCuts` (`srv: 2` pour le 2e). Sur PC + serveur http (contenu mixte) : il faut autoriser « Contenu non sécurisé » pour le site dans Chrome ;
   tant qu'aucune réponse n'est arrivée, rien n'est compté (`iptvSeenOk`) et l'écran Direct affiche l'astuce.

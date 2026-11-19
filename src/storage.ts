@@ -21,6 +21,10 @@ export type Settings = {
   iptvUrl: string;
   /** 2e serveur IPTV (beaucoup de fournisseurs en donnent deux : connexion / vidéo, ou secours) */
   iptvUrl2: string;
+  /** Canal ntfy partagé entre le Chromecast et le téléphone ('' = pas de liaison) */
+  ntfyTopic: string;
+  /** Cet appareil envoie les alertes et écoute « Ça coupe sur la télé » (oui sur le Chromecast) */
+  alertsOn: boolean;
   /** Réglages « télé » déjà appliqués (Chromecast / Android TV) */
   tvInit?: boolean;
 };
@@ -38,6 +42,8 @@ export const defaultSettings: Settings = {
   deviceLabel: '',
   iptvUrl: '',
   iptvUrl2: '',
+  ntfyTopic: '',
+  alertsOn: false,
 };
 
 /**

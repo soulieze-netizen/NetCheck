@@ -5,6 +5,7 @@ import { C } from '../analysis';
 import { engine } from '../engine';
 import { IS_TV, IS_WEB } from '../net';
 import { clearAllDays, iptvOrigin, type Settings } from '../storage';
+import { cleanTopic, newTopic } from '../remote';
 import { Btn, Card, H, T, Input } from '../ui';
 import { useEngine } from './Live';
 
@@ -85,6 +86,39 @@ export function SettingsScreen() {
             <T muted>Laisse vide : l’appli la trouve seule (en général 192.168.0.1 chez VOO).</T>
           </>
         )}
+      </Card>
+
+      <Card>
+        <H>🔔 Alertes sur le téléphone</H>
+        <T muted>
+          Le Chromecast t’envoie une notification à chaque problème (coupure, bascule Wi-Fi, serveur IPTV qui ne répond plus), et le bouton « 📺 Ça
+          coupe sur la télé » du téléphone enregistre la coupure sur le Chromecast. Il faut le même nom de canal sur les deux appareils.
+        </T>
+        <Text style={styles.sub}>Nom du canal (le même sur le Chromecast et le téléphone, à garder secret)</Text>
+        <Input
+          value={s.ntfyTopic ?? ''}
+          onChangeText={(t) => engine.updateSettings({ ntfyTopic: cleanTopic(t) })}
+          placeholder="ex. netcheck-k7p2xq3m"
+          placeholderTextColor={C.muted}
+          style={styles.input}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {!s.ntfyTopic && (
+          <View style={{ flexDirection: 'row', marginTop: 8 }}>
+            <Btn label="Créer un nom de canal" onPress={() => engine.updateSettings({ ntfyTopic: newTopic() })} />
+          </View>
+        )}
+        <Text style={styles.sub}>Cet appareil envoie les alertes</Text>
+        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+          <Btn label="Oui (Chromecast)" kind={s.alertsOn ? 'primary' : 'default'} onPress={() => engine.updateSettings({ alertsOn: true })} />
+          <Btn label="Non (téléphone)" kind={!s.alertsOn ? 'primary' : 'default'} onPress={() => engine.updateSettings({ alertsOn: false })} />
+        </View>
+        <T muted style={{ marginTop: 8 }}>
+          Sur le téléphone : installe l’appli gratuite « ntfy » (Play Store), appuie sur « + », tape exactement le nom du canal, puis « S’abonner ». Entre
+          aussi ce nom ici, dans NetCheck, avec « Non (téléphone) ». Les messages passent par le service public ntfy.sh et ne contiennent que l’heure et le
+          type de problème.
+        </T>
       </Card>
 
       <Card>

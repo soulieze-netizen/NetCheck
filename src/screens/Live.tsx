@@ -94,6 +94,9 @@ export function LiveScreen() {
         <T muted>Les 2 dernières minutes, une barre par seconde (hauteur = temps de réponse).</T>
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
           {st.running && <Btn label="⚠️ Ça vient de couper" kind="primary" onPress={() => engine.mark()} />}
+          {!st.settings.alertsOn && !!st.settings.ntfyTopic && (
+            <Btn label="📺 Ça coupe sur la télé" kind="primary" onPress={() => engine.remoteMark()} />
+          )}
           {st.running ? (
             <Btn label="⏹ Arrêter la surveillance" kind="danger" onPress={() => engine.stop()} />
           ) : (
@@ -101,6 +104,21 @@ export function LiveScreen() {
           )}
           <Btn label="⚡ Tester le débit" disabled={!!st.testing} onPress={() => engine.runSpeedTest()} />
         </View>
+        {!st.settings.alertsOn && !!st.settings.ntfyTopic && st.remote.lastMarkSentAt && (
+          <T style={{ marginTop: 8 }}>
+            📺 Envoyé au Chromecast à {hhmm(st.remote.lastMarkSentAt)} : il l’enregistre avec ses mesures dans les 10 s, et le résultat arrive en
+            notification ntfy.
+          </T>
+        )}
+        {st.settings.alertsOn && !!st.settings.ntfyTopic && (
+          <T muted style={{ marginTop: 8 }}>
+            🔔 Alertes envoyées sur le canal ntfy « {st.settings.ntfyTopic} »
+            {st.remote.lastSentAt ? ` · dernière à ${hhmm(st.remote.lastSentAt)}` : ''}.
+          </T>
+        )}
+        {!!st.settings.ntfyTopic && st.remote.lastError && (
+          <T style={{ color: C.down, marginTop: 6 }}>Liaison ntfy : {st.remote.lastError} (nouvel essai dans 1 min).</T>
+        )}
         {st.running && !st.lastMark && (
           <T muted style={{ marginTop: 8 }}>
             Quand l’image coupe, appuie sur « ⚠️ Ça vient de couper » : l’appli garde ce qu’elle mesurait juste avant.

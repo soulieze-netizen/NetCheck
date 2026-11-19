@@ -4,6 +4,8 @@ import { Platform } from 'react-native';
 import NativeBg from '../modules/netcheck-background/src/NetCheckBackgroundModule';
 import { setBackground } from './background';
 import { askScanPermission } from './diagnostic';
+import { dur, hhmm, hhmmss, markCauses } from './analysis';
+import { cleanTopic, Remote, type RemoteStatus } from './remote';
 import { IS_TV, IS_WEB, probe, speedTest, TARGETS } from './net';
 import {
   dayKey,
@@ -82,6 +84,7 @@ export type EngineState = {
   wifiRecent: WifiSample[]; // 2 dernières minutes
   wifiRoamsRecent: number; // changements de point d'accès sur 2 min
   lastMark: Mark | null;
+  remote: RemoteStatus;
 };
 
 type Listener = (s: EngineState) => void;
@@ -113,6 +116,16 @@ class Engine {
   // Box : si elle ne répond jamais à l'ouverture de connexion alors qu'internet marche, on repasse à la page web
   private tcpFailsWhileUp = 0;
   private tcpBroken = false;
+  // Liaison téléphone ↔ Chromecast (ntfy)
+  private remote = new Remote(
+    () => (this.settings ? cleanTopic(this.settings.ntfyTopic) : ''),
+    () => `NetCheck · ${this.settings?.deviceLabel || (IS_TV ? 'Chromecast' : 'appareil')}`,
+    (at) => {
+      this.mark(at, true);
+    },
+    () => this.emit()
+  );
+  private wifiLostAt = 0;
   // Coupure en cours
   private downSince = 0;
   private downBox = false;
@@ -130,7 +143,8 @@ class Engine {
     this.settings = await loadSettings();
     if (IS_TV && !this.settings.tvInit) {
       // Sur la télé : pas de test de débit automatique (il saturerait la ligne et couperait la chaîne qu'on regarde)
-      this.settings = { ...this.settings, tvInit: true, speedEvery: 0, deviceLabel: this.settings.deviceLabel || 'Chromecast' };
+      // et c'est elle qui envoie les alertes au téléphone
+      this.settings = { ...this.settings, tvInit: true, speedEvery: 0, alertsOn: true, deviceLabel: this.settings.deviceLabel || 'Chromecast' };
       saveSettings(this.settings);
     }
     this.day = await loadDay(dayKey());
@@ -176,7 +190,7 @@ class Engine {
       settings: this.settings!,
       day: this.day,
       last: this.last,
-      recent: this.recent,
+      recent: this.recent.slice(-120),
       openCut: this.openCut,
       testing: this.testing,
       boxIp: this.boxIp,
@@ -189,9 +203,10 @@ class Engine {
         if (!w || !this.day || Date.now() - w.at > 15000) return null;
         return { ...w, ap: apLabel(this.day, w.bssid), band: bandOf(w.freq) };
       })(),
-      wifiRecent: this.wifiRecent,
+      wifiRecent: this.wifiRecent.filter((w) => w.at > Date.now() - 120000),
       wifiRoamsRecent: (this.day?.wifiEvents ?? []).filter((e) => e.kind === 'roam' && e.at > Date.now() - 120000).length,
       lastMark: this.lastMark,
+      remote: this.remote.status,
     };
   }
 
@@ -268,11 +283,12 @@ class Engine {
       }
       this.last = s;
       this.recent.push(s);
-      if (this.recent.length > 120) this.recent.shift();
+      if (this.recent.length > 180) this.recent.shift(); // 3 min gardées (« Ça coupe sur la télé » arrive avec un peu de retard)
       if (state !== 'test') this.record(s);
       else this.prevBest = this.prevBox = null; // pas de gigue calculée à travers un test de débit
       this.maybeIptv(now);
       this.maybeWifi(now);
+      this.remote.tick(now, !!this.settings?.alertsOn, !!this.settings?.alertsOn);
       this.maybeSpeedTest(now, up);
       this.notify(false);
       this.emit();
@@ -317,13 +333,20 @@ class Engine {
     const day = this.day;
     const events = (day.wifiEvents ??= []);
     if (!w || w.rssi <= -127) {
-      if (this.hadWifi) events.push({ at: now, kind: 'lost' });
+      if (this.hadWifi) {
+        events.push({ at: now, kind: 'lost' });
+        this.wifiLostAt = now;
+      }
       this.hadWifi = false;
       return;
     }
     const s: WifiSample = { at: now, rssi: w.rssi, link: w.linkSpeed, freq: w.frequency, bssid: w.bssid, ssid: w.ssid };
     if (s.bssid && !(day.aps ??= []).includes(s.bssid)) day.aps.push(s.bssid);
-    if (!this.hadWifi && this.lastBssid !== null) events.push({ at: now, kind: 'back', to: apLabel(day, s.bssid), rssi: s.rssi });
+    if (!this.hadWifi && this.lastBssid !== null) {
+      events.push({ at: now, kind: 'back', to: apLabel(day, s.bssid), rssi: s.rssi });
+      if (this.wifiLostAt) this.alert(`${hhmm(this.wifiLostAt)} : Wi-Fi perdu pendant ${dur(Math.round((now - this.wifiLostAt) / 1000))}`);
+      this.wifiLostAt = 0;
+    }
     // Changement de point d'accès (box ↔ répéteur) : BSSID différent, ou à défaut changement de bande (2,4 ↔ 5 GHz)
     const roam =
       this.hadWifi &&
@@ -338,6 +361,8 @@ class Engine {
         rssi: s.rssi,
       });
       this.acc.roams++;
+      const e = events[events.length - 1];
+      this.alert(`${hhmm(now)} : bascule Wi-Fi du point d’accès ${e.from} vers ${e.to} (${s.rssi} dBm)`);
     }
     this.hadWifi = true;
     this.lastBssid = s.bssid ?? this.lastBssid;
@@ -348,17 +373,20 @@ class Engine {
     if (!a.rssiMin || s.rssi < a.rssiMin) a.rssiMin = s.rssi;
     if (s.link > 0 && (!a.linkMin || s.link < a.linkMin)) a.linkMin = s.link;
     this.wifiRecent.push(s);
-    while (this.wifiRecent.length && this.wifiRecent[0].at < now - 120000) this.wifiRecent.shift();
+    while (this.wifiRecent.length && this.wifiRecent[0].at < now - 180000) this.wifiRecent.shift();
   }
 
   // ---------- « Ça vient de couper » ----------
-  /** Enregistre l'appui avec un résumé de ce qui était mesuré dans les 2 min d'avant */
-  async mark() {
+  /**
+   * Enregistre l'appui avec un résumé de ce qui était mesuré dans les 2 min d'avant.
+   * `at` : heure de l'appui (sur le téléphone, pour « Ça coupe sur la télé ») ; `fromPhone` : renvoyer le résultat en alerte.
+   */
+  async mark(at = Date.now(), fromPhone = false) {
     await this.ensureDay();
     if (!this.day) return;
-    const now = Date.now();
+    const now = at;
     const from = now - MARK_WINDOW_MS;
-    const xs = this.recent.filter((x) => x.at >= from && x.state !== 'test');
+    const xs = this.recent.filter((x) => x.at >= from && x.at <= now + 5000 && x.state !== 'test');
     const jit = (vals: (number | null | undefined)[]) => {
       let sum = 0,
         n = 0;
@@ -390,7 +418,19 @@ class Engine {
     (this.day.marks ??= []).push(m);
     this.lastMark = m;
     await saveDay(this.day);
+    if (fromPhone || this.settings?.alertsOn)
+      this.remote.alert(`Coupure signalée à ${hhmmss(now)} : ${markCauses(m).join(', ') || 'rien d’anormal mesuré (ni internet, ni Wi-Fi, ni IPTV)'}`);
     this.emit();
+  }
+
+  /** Téléphone : « Ça coupe sur la télé » → le Chromecast enregistre la coupure avec ses mesures */
+  remoteMark() {
+    return this.remote.sendMark();
+  }
+
+  /** Alerte envoyée au téléphone (si cet appareil envoie les alertes) */
+  alert(text: string) {
+    if (this.settings?.alertsOn) this.remote.alert(text);
   }
 
   private async ensureDay() {
@@ -483,6 +523,13 @@ class Engine {
 
   private closeCut(at: number) {
     if (this.openCut) {
+      const c = this.openCut;
+      if (this.running && at > c.start)
+        this.alert(
+          `${hhmmss(c.start)} : internet coupé ${dur(Math.round((at - c.start) / 1000))} (${
+            c.where === 'box' ? 'Wi-Fi / box injoignable' : c.where === 'internet' ? 'box joignable : ligne VOO' : 'cause inconnue'
+          })`
+        );
       this.openCut.end = at;
       this.openCut = null;
       if (this.day) saveDay(this.day);
@@ -680,7 +727,7 @@ class IptvMonitor {
       url: this.url(),
       name: this.eng.iptvNameOf(this.srv),
       blocked: this.mixed() && !this.seenOk && this.tried >= 3,
-      recent: this.recent,
+      recent: this.recent.filter((x) => x.at > Date.now() - 120000),
       openCut: this.openCut,
     };
   }
@@ -718,7 +765,7 @@ class IptvMonitor {
       this.seenOk = true;
     }
     this.recent.push({ at, ms });
-    while (this.recent.length && this.recent[0].at < Date.now() - 120000) this.recent.shift();
+    while (this.recent.length && this.recent[0].at < Date.now() - 180000) this.recent.shift();
     // Si internet est lui-même coupé, ce n'est pas la faute du serveur IPTV : on ne compte pas
     if (this.eng.internetDown()) {
       this.close(at);
@@ -747,6 +794,8 @@ class IptvMonitor {
 
   close(at: number) {
     if (this.openCut) {
+      const c = this.openCut;
+      this.eng.alert(`${hhmmss(c.start)} : ${this.eng.iptvNameOf(this.srv)} sans réponse ${dur(Math.round((at - c.start) / 1000))} (internet OK)`);
       this.openCut.end = at;
       this.openCut = null;
       this.eng.saveToday();
