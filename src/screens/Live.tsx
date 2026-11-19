@@ -106,18 +106,18 @@ export function LiveScreen() {
         </View>
         {!st.settings.alertsOn && !!st.settings.ntfyTopic && st.remote.lastMarkSentAt && (
           <T style={{ marginTop: 8 }}>
-            📺 Envoyé au Chromecast à {hhmm(st.remote.lastMarkSentAt)} : il l’enregistre avec ses mesures dans les 10 s, et le résultat arrive en
-            notification ntfy.
+            📺 Envoyé à la télé à {hhmm(st.remote.lastMarkSentAt)} : elle l’enregistre avec ses mesures dans les 10 s. Le résultat se lit sur la télé
+            (Direct ou Journée).
           </T>
         )}
         {st.settings.alertsOn && !!st.settings.ntfyTopic && (
           <T muted style={{ marginTop: 8 }}>
-            🔔 Alertes envoyées sur le canal ntfy « {st.settings.ntfyTopic} »
-            {st.remote.lastSentAt ? ` · dernière à ${hhmm(st.remote.lastSentAt)}` : ''}.
+            📱 Relié au téléphone (canal « {st.settings.ntfyTopic} ») : son bouton « 📺 Ça coupe sur la télé » enregistre la coupure ici
+            {st.remote.lastMarkReceivedAt ? ` · dernier reçu à ${hhmm(st.remote.lastMarkReceivedAt)}` : ''}.
           </T>
         )}
-        {!!st.settings.ntfyTopic && st.remote.lastError && (
-          <T style={{ color: C.down, marginTop: 6 }}>Liaison ntfy : {st.remote.lastError} (nouvel essai dans 1 min).</T>
+        {!st.settings.alertsOn && !!st.settings.ntfyTopic && st.remote.lastError && (
+          <T style={{ color: C.down, marginTop: 6 }}>Liaison avec la télé : {st.remote.lastError}. Réessaie.</T>
         )}
         {st.running && !st.lastMark && (
           <T muted style={{ marginTop: 8 }}>

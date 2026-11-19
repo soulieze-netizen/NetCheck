@@ -23,7 +23,7 @@ export type Settings = {
   iptvUrl2: string;
   /** Canal ntfy partagé entre le Chromecast et le téléphone ('' = pas de liaison) */
   ntfyTopic: string;
-  /** Cet appareil envoie les alertes et écoute « Ça coupe sur la télé » (oui sur le Chromecast) */
+  /** Cet appareil est la télé : il écoute « Ça coupe sur la télé » envoyé par le téléphone (oui sur le Chromecast) */
   alertsOn: boolean;
   /** Réglages « télé » déjà appliqués (Chromecast / Android TV) */
   tvInit?: boolean;
