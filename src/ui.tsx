@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from 'react-native';
 import { C } from './analysis';
 import { IS_TV } from './net';
 
@@ -47,14 +47,36 @@ export function Btn({
 export function Card({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
   const f = useFocus();
   if (IS_TV) {
-    // Sur la télé, chaque carte se sélectionne avec les flèches : la page défile jusqu'à elle
+    // Sur la télé : un petit point d'arrêt invisible en haut de chaque carte, pour que les flèches fassent défiler les cartes
+    // qui ne contiennent que du texte. Il est en haut et fin, donc la flèche bas descend ensuite vers les champs et boutons
+    // de la carte (une carte entière sélectionnable les cachait : on ne pouvait plus écrire dans les champs).
     return (
-      <Pressable focusable onFocus={f.onFocus} onBlur={f.onBlur} style={[styles.card, style, f.focused && FOCUS]}>
+      <View style={[styles.card, style, f.focused && FOCUS]}>
+        <Pressable focusable onFocus={f.onFocus} onBlur={f.onBlur} style={styles.anchor} />
         {children}
-      </Pressable>
+      </View>
     );
   }
   return <View style={[styles.card, style]}>{children}</View>;
+}
+
+/** Champ de saisie avec contour visible quand il est sélectionné à la télécommande */
+export function Input(props: TextInputProps) {
+  const f = useFocus();
+  return (
+    <TextInput
+      {...props}
+      onFocus={(e) => {
+        f.onFocus();
+        props.onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        f.onBlur();
+        props.onBlur?.(e);
+      }}
+      style={[props.style, f.focused && FOCUS]}
+    />
+  );
 }
 
 export const H = ({ children }: { children: React.ReactNode }) => <Text style={styles.h}>{children}</Text>;
@@ -74,6 +96,7 @@ export const styles = StyleSheet.create({
   },
   btnText: { color: C.text, fontWeight: '700', fontSize: 15 },
   card: { backgroundColor: C.panel, borderRadius: 14, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: C.border },
+  anchor: { position: 'absolute', top: 0, left: 0, right: 0, height: 6 },
   h: { color: C.text, fontSize: 17, fontWeight: '800', marginBottom: 8 },
   t: { color: C.text, fontSize: 15 },
 });

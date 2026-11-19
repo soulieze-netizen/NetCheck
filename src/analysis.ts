@@ -244,7 +244,13 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
     if (unstable) {
       out.push(`Connexion instable : ${facts}. De quoi faire saccader ou couper une vidéo sans que ce soit une vraie coupure.`);
       if (!isPc && bjit != null) {
-        if (bjit >= 15 && bjit >= jit * 0.5)
+        // La box est testée via sa page d'administration : si elle répond moins régulièrement qu'internet (qui passe pourtant
+        // par elle), c'est sa page qui est lente, pas le Wi-Fi → on ne conclut rien de cette mesure.
+        if (bjit > jit * 1.2)
+          out.push(
+            `La box répond moins régulièrement qu’internet (gigue box ${Math.round(bjit)} ms, internet ${Math.round(jit)} ms) : c’est sa page d’administration qui est lente, cette mesure ne permet pas d’accuser le Wi-Fi.`
+          );
+        else if (bjit >= 15 && bjit >= jit * 0.5)
           out.push(`L’instabilité existe déjà entre l’appareil et la box (gigue box ${Math.round(bjit)} ms) : c’est le Wi-Fi ou le répéteur qui est en cause.`);
         else if (bjit < 10)
           out.push(`La box, elle, répond de façon régulière (gigue box ${Math.round(bjit)} ms) : l’instabilité vient d’après la box, donc de la ligne / du réseau VOO.`);

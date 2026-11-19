@@ -200,7 +200,13 @@ function Stability({ st }: { st: EngineState }) {
       <H>Stabilité (2 dernières min)</H>
       <View style={{ gap: 4 }}>
         <Row label="Gigue internet" value={j == null ? '—' : `${j} ms`} color={level(j, 15, 30)} />
-        {!IS_WEB && <Row label="Gigue jusqu’à la box (Wi-Fi)" value={bj == null ? '—' : `${bj} ms`} color={level(bj, 10, 20)} />}
+        {!IS_WEB && (
+          <Row
+            label="Gigue jusqu’à la box (Wi-Fi)"
+            value={bj == null ? '—' : `${bj} ms`}
+            color={bj != null && j != null && bj > j * 1.2 ? C.muted : level(bj, 10, 20)}
+          />
+        )}
         <Row label="Pics de temps de réponse" value={String(spikes)} color={level(spikes, 2, 6)} />
         <Row label="Requêtes perdues" value={pct(lossPct)} color={level(lossPct, 0.5, 2)} />
         {st.iptv
@@ -217,6 +223,12 @@ function Stability({ st }: { st: EngineState }) {
             );
           })}
       </View>
+      {!IS_WEB && bj != null && j != null && bj > j * 1.2 && (
+        <T muted style={{ marginTop: 6 }}>
+          La box répond moins régulièrement qu’internet, qui passe pourtant par elle : c’est sa page d’administration qui est lente, pas le
+          Wi-Fi. Cette ligne ne compte pas.
+        </T>
+      )}
       <T muted style={{ marginTop: 6 }}>
         La gigue, c’est l’irrégularité du temps de réponse d’une seconde à l’autre. Au-delà de ~30 ms, une vidéo en direct peut saccader ou couper
         sans que la connexion soit vraiment tombée.

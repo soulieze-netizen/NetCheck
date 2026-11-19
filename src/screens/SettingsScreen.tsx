@@ -1,11 +1,11 @@
 // Réglages : vitesses du contrat VOO, fréquence des tests de débit, box, données.
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { C } from '../analysis';
 import { engine } from '../engine';
 import { IS_TV, IS_WEB } from '../net';
 import { clearAllDays, iptvOrigin, type Settings } from '../storage';
-import { Btn, Card, H, T } from '../ui';
+import { Btn, Card, H, T, Input } from '../ui';
 import { useEngine } from './Live';
 
 type NumKey = 'downMin' | 'downNormal' | 'downMax' | 'upMin' | 'upNormal' | 'upMax';
@@ -63,7 +63,7 @@ export function SettingsScreen() {
       <Card>
         <H>Appareil</H>
         <T muted>Nom affiché dans le rapport PDF.</T>
-        <TextInput
+        <Input
           value={s.deviceLabel}
           onChangeText={(t) => engine.updateSettings({ deviceLabel: t })}
           placeholder={IS_WEB ? 'ex. PC branché en câble' : 'ex. Téléphone Wi-Fi salon'}
@@ -73,7 +73,7 @@ export function SettingsScreen() {
         {!IS_WEB && (
           <>
             <Text style={styles.sub}>Adresse de la box</Text>
-            <TextInput
+            <Input
               value={s.boxIp}
               onChangeText={(t) => engine.updateSettings({ boxIp: t.trim() })}
               placeholder={`automatique${st.boxIp ? ` (${st.boxIp})` : ''}`}
@@ -145,7 +145,7 @@ function IptvField({ label, value, onChange }: { label: string; value: string; o
   return (
     <>
       <Text style={styles.sub}>{label}</Text>
-      <TextInput
+      <Input
         value={value ?? ''}
         onChangeText={(t) => onChange(t.trim())}
         placeholder="http://serveur:port (vide = pas de test)"
@@ -175,7 +175,7 @@ function Field({ label, value, onChange }: { label: string; value: number; onCha
   const [text, setText] = useState(value ? String(value) : '');
   return (
     <View style={{ flex: 1 }}>
-      <TextInput
+      <Input
         value={text}
         onChangeText={(t) => {
           setText(t);
