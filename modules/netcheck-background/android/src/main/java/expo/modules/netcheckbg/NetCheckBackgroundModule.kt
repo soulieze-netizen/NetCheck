@@ -1,5 +1,6 @@
 package expo.modules.netcheckbg
 
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -115,6 +116,31 @@ class NetCheckBackgroundModule : Module() {
           promise.resolve(ms)
         } catch (_: Exception) {}
       }.start()
+    }
+
+    /**
+     * Mémoire de tout l'appareil (Mo) : libre, totale, et « mémoire basse » selon Android.
+     * Sur un petit Chromecast, un manque de mémoire fait figer ou recharger les applis sans aucun problème de réseau.
+     */
+    Function("memInfo") {
+      val c = ctx
+      if (c == null) {
+        null
+      } else {
+        try {
+          val am = c.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+          val mi = ActivityManager.MemoryInfo()
+          am.getMemoryInfo(mi)
+          mapOf(
+            "availMb" to (mi.availMem / 1048576L).toInt(),
+            "totalMb" to (mi.totalMem / 1048576L).toInt(),
+            "thresholdMb" to (mi.threshold / 1048576L).toInt(),
+            "low" to mi.lowMemory
+          )
+        } catch (_: Exception) {
+          null
+        }
+      }
     }
 
     /** Wi-Fi auquel le téléphone est connecté : force du signal, fréquence, vitesse de liaison… */

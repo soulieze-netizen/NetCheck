@@ -1,7 +1,7 @@
 // Écran « Direct » : état de la connexion à la seconde près.
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dur, fmtMbps, hhmm, markCauses, pct, rssiWord, summarize } from '../analysis';
+import { C, cutSeconds, dur, fmtMbps, hhmm, markCauses, memIsLow, pct, rssiWord, summarize } from '../analysis';
 import { engine, SLOW_MS, type EngineState, type Sample } from '../engine';
 import { IS_TV, IS_WEB } from '../net';
 import { Btn, Card, H, T } from '../ui';
@@ -52,6 +52,13 @@ export function LiveScreen() {
           <Row label={`🏠 Box${st.boxIp ? ` (${st.boxIp})` : ''}`} value={IS_WEB ? 'non mesurée sur PC' : ms(s?.box)} color={msColor(s?.box)} />
           <Row label="🌐 Cloudflare" value={ms(s?.cf)} color={msColor(s?.cf)} />
           <Row label="🌐 Google" value={ms(s?.g)} color={msColor(s?.g)} />
+          {st.mem && (
+            <Row
+              label="🧠 Mémoire libre de l’appareil"
+              value={`${st.mem.availMb} Mo / ${st.mem.totalMb} Mo`}
+              color={memIsLow(st.mem.availMb, st.mem.totalMb, st.mem.low) ? C.down : st.mem.availMb < st.mem.totalMb * 0.2 ? C.slow : C.ok}
+            />
+          )}
           {st.wifi && (
             <Row
               label={`📶 Wi-Fi${st.wifi.ap !== '?' ? ` · point d’accès ${st.wifi.ap}` : ''}`}
@@ -267,6 +274,13 @@ function Stability({ st }: { st: EngineState }) {
             />
             <Row label="📶 Changements de point d’accès" value={String(st.wifiRoamsRecent)} color={st.wifiRoamsRecent ? C.down : C.ok} />
           </>
+        )}
+        {st.memMinRecent != null && st.mem && (
+          <Row
+            label="🧠 Mémoire libre la plus basse"
+            value={`${st.memMinRecent} Mo`}
+            color={memIsLow(st.memMinRecent, st.mem.totalMb) ? C.down : st.memMinRecent < st.mem.totalMb * 0.2 ? C.slow : C.ok}
+          />
         )}
         {st.iptv
           .filter((v) => !v.blocked)

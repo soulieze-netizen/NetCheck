@@ -52,7 +52,8 @@ export const defaultSettings: Settings = {
  *  gigue box (somme ms), gigue box (nb), sondes IPTV, sondes IPTV sans réponse, latence IPTV (somme ms des réponses)]
  *  puis la même chose pour le 2e serveur IPTV (sondes, sans réponse, latence),
  *  puis le Wi-Fi (Android, relevé toutes les 5 s) : signal dBm (somme, nb, pire), pire vitesse de liaison (Mb/s), changements de point d'accès.
- *  rssiMin / linkMin : 0 = pas de relevé.
+ *  puis la mémoire libre de l'appareil (Android, toutes les 5 s) : pire valeur en Mo, nb de relevés « mémoire basse ».
+ *  rssiMin / linkMin / memMin : 0 = pas de relevé.
  * Les champs à partir de la gigue n'existent pas dans les mesures d'avant le 18/11/2026 (lire avec ?? 0).
  */
 export type MinuteStat = [
@@ -81,9 +82,11 @@ export type MinuteStat = [
   rssiMin?: number,
   linkMin?: number,
   roams?: number,
+  memMin?: number,
+  memLowN?: number,
 ];
 /** Index des champs ajoutés (gigue, pertes, IPTV) */
-export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16, iptv2N: 17, iptv2Lost: 18, iptv2LatSum: 19, rssiSum: 20, rssiN: 21, rssiMin: 22, linkMin: 23, roams: 24 } as const;
+export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16, iptv2N: 17, iptv2Lost: 18, iptv2LatSum: 19, rssiSum: 20, rssiN: 21, rssiMin: 22, linkMin: 23, roams: 24, memMin: 25, memLowN: 26 } as const;
 /** Index des champs de chaque serveur IPTV (1 et 2) */
 export const IPTV_M = [
   { n: M.iptvN, lost: M.iptvLost, lat: M.iptvLatSum },
@@ -137,6 +140,9 @@ export type Mark = {
   rssiMin: number | null;
   roam: boolean;
   wifiLost: boolean;
+  memMinMb?: number | null; // mémoire libre la plus basse (Mo)
+  memTotalMb?: number | null;
+  memLow?: boolean; // Android a signalé « mémoire basse »
 };
 
 export function dayKey(d = new Date()) {

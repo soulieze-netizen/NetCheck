@@ -86,6 +86,8 @@ export type DaySummary = {
   roams: number;
   wifiLost: number;
   marks: Mark[];
+  memMin: number | null; // mémoire libre la plus basse (Mo)
+  memLowN: number; // relevés « mémoire basse » (1 toutes les 5 s)
 };
 
 /** Ce qui a été vu autour d'un appui sur « Ça vient de couper » */
@@ -101,9 +103,14 @@ export function markCauses(m: Mark): string[] {
   });
   if ((m.jitter ?? 0) >= 30) out.push(`gigue ${m.jitter} ms`);
   if (m.spikes >= 3) out.push(`${m.spikes} pics de temps de réponse`);
+  if (memIsLow(m.memMinMb, m.memTotalMb, m.memLow)) out.push(`mémoire de l’appareil saturée (${m.memMinMb} Mo libres)`);
   if (m.lost > 0 && !m.downS) out.push(`${m.lost} requête${m.lost > 1 ? 's' : ''} perdue${m.lost > 1 ? 's' : ''}`);
   return out;
 }
+
+/** Mémoire basse : signalée par Android, ou moins de 10 % libre */
+export const memIsLow = (availMb?: number | null, totalMb?: number | null, low?: boolean) =>
+  !!low || (availMb != null && !!totalMb && availMb < totalMb * 0.1);
 
 /** Signal Wi-Fi en mots */
 export const rssiWord = (r: number) => (r >= -60 ? 'bon' : r >= -70 ? 'moyen' : 'faible');
@@ -124,7 +131,9 @@ function wifiStats(day: Day) {
     n = 0,
     min = 0,
     link = 0,
-    roams = 0;
+    roams = 0,
+    mem = 0,
+    memLowN = 0;
   for (const m of day.minutes) {
     if (!m) continue;
     sum += mv(m, M.rssiSum);
@@ -134,6 +143,9 @@ function wifiStats(day: Day) {
     if (rm && (!min || rm < min)) min = rm;
     if (lm && (!link || lm < link)) link = lm;
     roams += mv(m, M.roams);
+    const mm = mv(m, M.memMin);
+    if (mm && (!mem || mm < mem)) mem = mm;
+    memLowN += mv(m, M.memLowN);
   }
   return {
     rssiAvg: n ? Math.round(sum / n) : null,
@@ -142,6 +154,8 @@ function wifiStats(day: Day) {
     roams,
     wifiLost: (day.wifiEvents ?? []).filter((e) => e.kind === 'lost').length,
     marks: day.marks ?? [],
+    memMin: mem || null,
+    memLowN,
   };
 }
 
@@ -356,6 +370,18 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
     if (lostW) out.push(`Le Wi-Fi a été complètement perdu ${lostW} fois.`);
   }
 
+  // Mémoire de l'appareil (Android)
+  const memDays = list.filter((d) => d.memMin != null);
+  if (memDays.length && !isPc) {
+    const low = list.reduce((a, d) => a + d.memLowN, 0);
+    const worst = Math.min(...memDays.map((d) => d.memMin!));
+    if (low)
+      out.push(
+        `L’appareil a manqué de mémoire (au plus bas ${worst} Mo libres, ${dur(low * 5)} en « mémoire basse ») : les applis peuvent alors figer ou recharger sans aucun problème de réseau. Remède : vider le cache des applis, désinstaller celles qui ne servent pas, redémarrer le Chromecast de temps en temps.`
+      );
+    else out.push(`Mémoire de l’appareil : jamais saturée (au plus bas ${worst} Mo libres).`);
+  }
+
   // Coupures signalées avec « Ça vient de couper »
   const marks = list.flatMap((d) => d.marks);
   if (marks.length) {
@@ -363,7 +389,8 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
       wifi = 0,
       iptv = 0,
       unstable = 0,
-      nothing = 0;
+      nothing = 0,
+      memLow = 0;
     for (const m of marks) {
       const c = markCauses(m);
       if (!c.length) nothing++;
@@ -371,12 +398,14 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
       if (m.wifiLost || m.roam || (m.rssiMin != null && m.rssiMin <= -75)) wifi++;
       if (m.iptvFails.some((f) => f > 0)) iptv++;
       if ((m.jitter ?? 0) >= 30 || m.spikes >= 3 || (m.lost > 0 && !m.downS)) unstable++;
+      if (memIsLow(m.memMinMb, m.memTotalMb, m.memLow)) memLow++;
     }
     const parts = [
       net && `${net} pendant une coupure d’internet`,
       wifi && `${wifi} avec un problème de Wi-Fi (bascule, perte ou signal faible)`,
       iptv && `${iptv} avec le serveur IPTV sans réponse`,
       unstable && `${unstable} avec une connexion instable (gigue, pics, pertes)`,
+      memLow && `${memLow} avec la mémoire de l’appareil saturée`,
       nothing && `${nothing} sans rien d’anormal mesuré`,
     ].filter(Boolean);
     out.push(`Coupures que tu as signalées : ${marks.length}. ${parts.join(' ; ')}.`);

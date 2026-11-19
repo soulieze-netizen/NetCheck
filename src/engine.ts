@@ -54,6 +54,9 @@ export type Sample = {
 
 /** Dernière sonde d'un serveur IPTV */
 export type IptvSample = { at: number; ms: number | null };
+/** Relevé mémoire (Android) */
+export type MemSample = { at: number; availMb: number; totalMb: number; low: boolean };
+
 /** Relevé Wi-Fi (Android) */
 export type WifiSample = { at: number; rssi: number; link: number; freq: number; bssid: string | null; ssid: string | null };
 
@@ -84,6 +87,8 @@ export type EngineState = {
   wifiRoamsRecent: number; // changements de point d'accès sur 2 min
   lastMark: Mark | null;
   remote: RemoteStatus;
+  mem: MemSample | null; // dernier relevé mémoire (Android)
+  memMinRecent: number | null; // mémoire libre la plus basse sur 2 min (Mo)
 };
 
 type Listener = (s: EngineState) => void;
@@ -107,6 +112,7 @@ class Engine {
   // Wi-Fi
   private wifiAt = 0;
   private wifiRecent: WifiSample[] = [];
+  private memRecent: MemSample[] = [];
   private lastBssid: string | null = null;
   private lastFreq = 0;
   private hadWifi = false;
@@ -165,6 +171,7 @@ class Engine {
     this.openCut = null;
     this.iptv.forEach((m) => m.reset());
     this.wifiRecent = [];
+    this.memRecent = [];
     this.lastBssid = null;
     this.lastFreq = 0;
     this.hadWifi = false;
@@ -204,6 +211,11 @@ class Engine {
       wifiRoamsRecent: (this.day?.wifiEvents ?? []).filter((e) => e.kind === 'roam' && e.at > Date.now() - 120000).length,
       lastMark: this.lastMark,
       remote: this.remote.status,
+      mem: this.memRecent[this.memRecent.length - 1] ?? null,
+      memMinRecent: (() => {
+        const xs = this.memRecent.filter((m) => m.at > Date.now() - 120000);
+        return xs.length ? Math.min(...xs.map((m) => m.availMb)) : null;
+      })(),
     };
   }
 
@@ -319,6 +331,7 @@ class Engine {
   private maybeWifi(now: number) {
     if (IS_WEB || !NativeBg || !this.day || now - this.wifiAt < WIFI_EVERY_MS) return;
     this.wifiAt = now;
+    this.sampleMem(now);
     if (this.netType !== 'wifi') {
       this.hadWifi = false;
       return;
@@ -366,6 +379,21 @@ class Engine {
     while (this.wifiRecent.length && this.wifiRecent[0].at < now - 180000) this.wifiRecent.shift();
   }
 
+  // ---------- Mémoire de l'appareil (Android, toutes les 5 s, avec le Wi-Fi) ----------
+  private sampleMem(now: number) {
+    let mi: ReturnType<NonNullable<typeof NativeBg>['memInfo']> = null;
+    try {
+      mi = NativeBg?.memInfo?.() ?? null;
+    } catch {}
+    if (!mi || !mi.totalMb) return;
+    const m: MemSample = { at: now, availMb: mi.availMb, totalMb: mi.totalMb, low: mi.low };
+    const a = this.acc;
+    if (!a.memMin || m.availMb < a.memMin) a.memMin = m.availMb;
+    if (m.low) a.memLowN++;
+    this.memRecent.push(m);
+    while (this.memRecent.length && this.memRecent[0].at < now - 180000) this.memRecent.shift();
+  }
+
   // ---------- « Ça vient de couper » ----------
   /**
    * Enregistre l'appui avec un résumé de ce qui était mesuré dans les 2 min d'avant.
@@ -404,6 +432,11 @@ class Engine {
       rssiMin: wifi.length ? Math.min(...wifi.map((w) => w.rssi)) : null,
       roam: ev.some((e) => e.kind === 'roam'),
       wifiLost: ev.some((e) => e.kind === 'lost'),
+      ...(() => {
+        const ms = this.memRecent.filter((x) => x.at >= from && x.at <= now + 5000);
+        if (!ms.length) return {};
+        return { memMinMb: Math.min(...ms.map((x) => x.availMb)), memTotalMb: ms[0].totalMb, memLow: ms.some((x) => x.low) };
+      })(),
     };
     (this.day.marks ??= []).push(m);
     this.lastMark = m;
@@ -544,6 +577,8 @@ class Engine {
         a.rssiMin,
         a.linkMin,
         a.roams,
+        a.memMin,
+        a.memLowN,
       ];
       // Même minute déjà partiellement remplie (redémarrage) : on additionne
       if (prev) {
@@ -554,6 +589,7 @@ class Engine {
         const minNz = (x?: number, y?: number) => (!x ? y ?? 0 : !y ? x : Math.min(x, y));
         merged[M.rssiMin] = minNz(prev[M.rssiMin], cur[M.rssiMin]);
         merged[M.linkMin] = minNz(prev[M.linkMin], cur[M.linkMin]);
+        merged[M.memMin] = minNz(prev[M.memMin], cur[M.memMin]);
         this.day.minutes[this.minuteIdx] = merged;
       } else this.day.minutes[this.minuteIdx] = cur;
       saveDay(this.day);
@@ -671,6 +707,8 @@ function newAcc() {
     rssiMin: 0,
     linkMin: 0,
     roams: 0,
+    memMin: 0,
+    memLowN: 0,
   };
 }
 

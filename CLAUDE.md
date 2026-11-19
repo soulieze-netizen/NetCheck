@@ -23,6 +23,8 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
   Repli sur la page web si 5 échecs alors qu'internet répond (`tcpBroken`). Verdict : gigue box > 1,2 × gigue internet = mesure non fiable.
 - Wi-Fi (Android, toutes les 5 s, `maybeWifi`) : signal, vitesse de liaison, BSSID → `day.aps` (A, B, C…), `day.wifiEvents` (roam / lost / back).
   BSSID = permission position + localisation activée, sinon bascule détectée seulement par changement de bande.
+- Mémoire (Android, `memInfo` natif, relevée avec le Wi-Fi toutes les 5 s) : minute = memMin (Mo) + memLowN ; « basse » = signalée par
+  Android ou < 10 % libre (`memIsLow`). Ajoutée le 19/11 : le « recharge 15 s » de l'IPTV n'était lié à aucun souci réseau mesuré.
 - « ⚠️ Ça vient de couper » (`engine.mark`) : résumé des 2 min d'avant dans `day.marks`, causes via `markCauses` (analysis.ts).
 - « 📺 Ça coupe sur la télé » par ntfy.sh (src/remote.ts, réglages `ntfyTopic` + `alertsOn` = « cet appareil est la télé », oui par défaut
   sur la télé) : le téléphone publie `mark` sur `<canal>-cmd`, la télé le lit toutes les 10 s (limite ntfy.sh) → `engine.mark(heure de l'appui)`.

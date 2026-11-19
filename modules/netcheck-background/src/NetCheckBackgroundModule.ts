@@ -11,6 +11,8 @@ export type WifiInfo = {
   standard: number | null; // 4 = Wi-Fi 4 (n), 5 = Wi-Fi 5 (ac), 6 = Wi-Fi 6 (ax), 7 = Wi-Fi 7
 };
 
+export type MemInfo = { availMb: number; totalMb: number; thresholdMb: number; low: boolean };
+
 export type ScanNet = { ssid: string; bssid: string; level: number; frequency: number; center: number; width: number };
 export type ScanOutcome = { ok: boolean; fresh: boolean; error?: string; results: ScanNet[] };
 
@@ -25,6 +27,8 @@ declare class NetCheckBackgroundNative extends NativeModule<{}> {
   scanWifi(): Promise<ScanOutcome>;
   /** Temps d'ouverture d'une connexion (ms), null si pas de réponse */
   tcpPing(host: string, port: number, timeoutMs: number): Promise<number | null>;
+  /** Mémoire de l'appareil (Mo) */
+  memInfo(): MemInfo | null;
 }
 
 // Absent sur le web (PC) : la mesure tourne alors tant que l'onglet est ouvert

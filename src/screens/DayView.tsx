@@ -88,6 +88,11 @@ export function DayScreen() {
                 d’accès{sum.wifiLost ? ` · Wi-Fi perdu ${sum.wifiLost}×` : ''}
               </T>
             )}
+            {sum.memMin != null && (
+              <T muted>
+                🧠 Mémoire libre au plus bas : {sum.memMin} Mo{sum.memLowN ? ` · « mémoire basse » pendant ${dur(sum.memLowN * 5)}` : ' · jamais saturée'}
+              </T>
+            )}
           </>
         ) : (
           <T muted>Aucune mesure ce jour-là.</T>
