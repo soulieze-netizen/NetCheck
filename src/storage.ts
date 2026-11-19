@@ -44,7 +44,9 @@ export const defaultSettings: Settings = {
  * Une minute : [mesures, s. internet coupé, s. box injoignable, s. lentes, latence moy. ms, latence max ms, pertes isolées,
  *  gigue internet (somme ms), gigue internet (nb), pics, requêtes internet envoyées, requêtes perdues,
  *  gigue box (somme ms), gigue box (nb), sondes IPTV, sondes IPTV sans réponse, latence IPTV (somme ms des réponses)]
- *  puis la même chose pour le 2e serveur IPTV (sondes, sans réponse, latence).
+ *  puis la même chose pour le 2e serveur IPTV (sondes, sans réponse, latence),
+ *  puis le Wi-Fi (Android, relevé toutes les 5 s) : signal dBm (somme, nb, pire), pire vitesse de liaison (Mb/s), changements de point d'accès.
+ *  rssiMin / linkMin : 0 = pas de relevé.
  * Les champs à partir de la gigue n'existent pas dans les mesures d'avant le 18/11/2026 (lire avec ?? 0).
  */
 export type MinuteStat = [
@@ -68,9 +70,14 @@ export type MinuteStat = [
   iptv2N?: number,
   iptv2Lost?: number,
   iptv2LatSum?: number,
+  rssiSum?: number,
+  rssiN?: number,
+  rssiMin?: number,
+  linkMin?: number,
+  roams?: number,
 ];
 /** Index des champs ajoutés (gigue, pertes, IPTV) */
-export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16, iptv2N: 17, iptv2Lost: 18, iptv2LatSum: 19 } as const;
+export const M = { jitSum: 7, jitN: 8, spikes: 9, reqN: 10, reqLost: 11, boxJitSum: 12, boxJitN: 13, iptvN: 14, iptvLost: 15, iptvLatSum: 16, iptv2N: 17, iptv2Lost: 18, iptv2LatSum: 19, rssiSum: 20, rssiN: 21, rssiMin: 22, linkMin: 23, roams: 24 } as const;
 /** Index des champs de chaque serveur IPTV (1 et 2) */
 export const IPTV_M = [
   { n: M.iptvN, lost: M.iptvLost, lat: M.iptvLatSum },
@@ -101,6 +108,29 @@ export type Day = {
   speeds: SpeedTest[];
   /** Décrochages du serveur IPTV pendant qu'internet marchait */
   iptvCuts?: Cut[];
+  /** Points d'accès Wi-Fi vus dans la journée (BSSID), dans l'ordre : A, B, C… */
+  aps?: string[];
+  /** Événements Wi-Fi : changement de point d'accès, Wi-Fi perdu / revenu */
+  wifiEvents?: WifiEvent[];
+  /** Appuis sur « Ça vient de couper », avec ce qui était mesuré juste avant */
+  marks?: Mark[];
+};
+
+export type WifiEvent = { at: number; kind: 'roam' | 'lost' | 'back'; from?: string; to?: string; rssi?: number };
+
+/** Ce que l'appli voyait dans les 2 min avant l'appui sur « Ça vient de couper » */
+export type Mark = {
+  at: number;
+  downS: number; // secondes sans internet
+  lost: number; // requêtes perdues (hors coupure)
+  jitter: number | null;
+  boxJitter: number | null;
+  spikes: number;
+  boxDown: number; // secondes où la box ne répondait pas
+  iptvFails: number[]; // sondes sans réponse, par serveur IPTV
+  rssiMin: number | null;
+  roam: boolean;
+  wifiLost: boolean;
 };
 
 export function dayKey(d = new Date()) {
@@ -171,3 +201,11 @@ export function iptvName(s: Settings, srv: number) {
   if (urls.filter(Boolean).length < 2) return 'serveur IPTV';
   return `serveur IPTV ${srv}${host ? ` (${host})` : ''}`;
 }
+
+/** Nom court d'un point d'accès : A, B, C… dans l'ordre où il a été vu ce jour-là */
+export function apLabel(day: Day, bssid: string | null | undefined) {
+  if (!bssid) return '?';
+  const i = (day.aps ?? []).indexOf(bssid);
+  return i < 0 ? '?' : String.fromCharCode(65 + (i % 26));
+}
+export const bandOf = (freq: number | null | undefined) => (!freq ? '' : freq >= 5925 ? '6 GHz' : freq >= 4900 ? '5 GHz' : '2,4 GHz');

@@ -1,7 +1,7 @@
 // Écran « Rapport » : bilan sur plusieurs jours + export PDF (à envoyer à VOO).
 import React, { useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, pct, summarize, verdict, type DaySummary } from '../analysis';
+import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, markCauses, pct, summarize, verdict, type DaySummary } from '../analysis';
 import { IS_WEB } from '../net';
 import { iptvName, listDays, loadDay, type Day, type Settings } from '../storage';
 import { Btn, Card, H, T } from '../ui';
@@ -138,13 +138,15 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
           .filter((x) => x.n > 0)
           .map((x) => `${d.iptv.filter((y) => y.n > 0).length > 1 ? `n°${x.srv} : ` : ''}${x.cuts} (${pct(x.lossPct)})`)
           .join('<br>') || '—'
+      }</td><td>${d.rssiAvg != null ? `${d.rssiAvg} dBm (pire ${d.rssiMin}) · ${d.roams} bascule${d.roams > 1 ? 's' : ''}` : '—'}</td><td>${
+        d.marks.length || '—'
       }</td><td>${fmtMbps(d.avgDown)}</td><td>${fmtMbps(
         d.minDown
       )}</td><td>${d.underMin}/${d.speeds.filter((x) => x.down != null).length}</td></tr>`
     )
     .join('');
   const detail = days
-    .filter((d) => d.cuts.length || d.speeds.length || (d.iptvCuts ?? []).length)
+    .filter((d) => d.cuts.length || d.speeds.length || (d.iptvCuts ?? []).length || (d.marks ?? []).length || (d.wifiEvents ?? []).length)
     .map((d) => {
       const cuts = d.cuts
         .slice(-200)
@@ -157,7 +159,21 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
         .slice(-200)
         .map((c) => `<tr><td>${hhmmss(c.start)}</td><td>${dur(cutSeconds(c))}</td><td>${esc(iptvName(s, c.srv ?? 1))} (internet OK)</td></tr>`)
         .join('');
+      const marks = (d.marks ?? [])
+        .map((m) => `<tr><td>${hhmmss(m.at)}</td><td>${esc(markCauses(m).join(', ') || 'rien d’anormal mesuré')}</td></tr>`)
+        .join('');
+      const wev = (d.wifiEvents ?? [])
+        .slice(-200)
+        .map(
+          (e) =>
+            `<tr><td>${hhmmss(e.at)}</td><td>${
+              e.kind === 'roam' ? `changement de point d’accès ${esc(e.from ?? '?')} → ${esc(e.to ?? '?')}` : e.kind === 'lost' ? 'Wi-Fi perdu' : 'Wi-Fi revenu'
+            }</td></tr>`
+        )
+        .join('');
       return `<h3>${esc(dayLabel(d.date))}</h3>
+      ${marks ? `<p>Coupures signalées (ce qui était mesuré dans les 2 min d’avant) :</p><table><tr><th>Heure</th><th>Constat</th></tr>${marks}</table>` : ''}
+      ${wev ? `<p>Événements Wi-Fi :</p><table><tr><th>Heure</th><th>Événement</th></tr>${wev}</table>` : ''}
       ${cuts ? `<table><tr><th>Début</th><th>Durée</th><th>Où</th></tr>${cuts}</table>` : '<p>Aucune coupure.</p>'}
       ${iptv ? `<p>Décrochages du serveur IPTV :</p><table><tr><th>Début</th><th>Durée</th><th>Où</th></tr>${iptv}</table>` : ''}
       ${sp ? `<table><tr><th>Heure</th><th>Descendant</th><th>Montant</th><th>Ping</th><th></th></tr>${sp}</table>` : ''}`;
@@ -171,11 +187,11 @@ function reportHtml(days: Day[], sums: DaySummary[], lines: string[], s: Setting
   <p>${esc(contract)}</p>
   <p>Méthode : contrôle chaque seconde de la box et de deux serveurs internet (Cloudflare 1.1.1.1, Google) ; coupure = au moins 2 s sans réponse d’internet.
   Gigue = écart moyen du temps de réponse d’une seconde à l’autre ; pic = temps de réponse au moins 3 fois (et 150 ms) au-dessus de la médiane de la minute précédente ;
-  requêtes perdues = sondes sans réponse en 2 s, hors coupures.${s.iptvUrl || s.iptvUrl2 ? ' Serveur(s) IPTV testé(s) toutes les 2 s, uniquement quand internet répond.' : ''}
+  requêtes perdues = sondes sans réponse en 2 s, hors coupures. Box : temps d’ouverture d’une connexion (Android). Wi-Fi : signal et point d’accès relevés toutes les 5 s (Android).${s.iptvUrl || s.iptvUrl2 ? ' Serveur(s) IPTV testé(s) toutes les 2 s, uniquement quand internet répond.' : ''}
   Test de débit (Cloudflare) toutes les ${s.speedEvery || '—'} min.</p>
   <h2>Bilan</h2><ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
   <h2>Jour par jour</h2>
-  <table><tr><th>Jour</th><th>Mesuré</th><th>Coupures</th><th>Sans internet</th><th>Disponibilité</th><th>Réponse moy.</th><th>Gigue</th><th>Requêtes perdues</th><th>IPTV décrochages</th><th>⬇ moyen</th><th>⬇ minimum</th><th>Tests sous le min.</th></tr>${rows}</table>
+  <table><tr><th>Jour</th><th>Mesuré</th><th>Coupures</th><th>Sans internet</th><th>Disponibilité</th><th>Réponse moy.</th><th>Gigue</th><th>Requêtes perdues</th><th>IPTV décrochages</th><th>Wi-Fi</th><th>Coupures signalées</th><th>⬇ moyen</th><th>⬇ minimum</th><th>Tests sous le min.</th></tr>${rows}</table>
   <h2>Détail</h2>${detail}
   </body></html>`;
 }

@@ -23,6 +23,8 @@ declare class NetCheckBackgroundNative extends NativeModule<{}> {
   locationEnabled(): boolean;
   wifiInfo(): WifiInfo | null;
   scanWifi(): Promise<ScanOutcome>;
+  /** Temps d'ouverture d'une connexion (ms), null si pas de réponse */
+  tcpPing(host: string, port: number, timeoutMs: number): Promise<number | null>;
 }
 
 // Absent sur le web (PC) : la mesure tourne alors tant que l'onglet est ouvert

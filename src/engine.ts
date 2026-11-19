@@ -3,6 +3,7 @@
 import { Platform } from 'react-native';
 import NativeBg from '../modules/netcheck-background/src/NetCheckBackgroundModule';
 import { setBackground } from './background';
+import { askScanPermission } from './diagnostic';
 import { IS_TV, IS_WEB, probe, speedTest, TARGETS } from './net';
 import {
   dayKey,
@@ -12,6 +13,10 @@ import {
   saveSettings,
   iptvName,
   iptvUrls,
+  apLabel,
+  M,
+  bandOf,
+  type Mark,
   type Cut,
   type Day,
   type MinuteStat,
@@ -26,6 +31,8 @@ const SPIKE_FACTOR = 3;
 const SPIKE_MIN_MS = 150;
 const IPTV_EVERY_MS = 2000; // serveur IPTV testé toutes les 2 s (assez pour voir un décrochage, sans le harceler)
 const IPTV_TIMEOUT_MS = 3000;
+const WIFI_EVERY_MS = 5000; // signal Wi-Fi relevé toutes les 5 s (Android)
+const MARK_WINDOW_MS = 120000; // « Ça vient de couper » : on regarde les 2 min d'avant (le temps de quitter la chaîne et d'ouvrir l'appli)
 const IPTV_MIN_CUT = 2; // décrochage IPTV = au moins 2 sondes de suite sans réponse alors qu'internet marche
 
 const bestOf = (cf: number | null, g: number | null) => (cf == null ? g : g == null ? cf : Math.min(cf, g));
@@ -46,6 +53,9 @@ export type Sample = {
 
 /** Dernière sonde d'un serveur IPTV */
 export type IptvSample = { at: number; ms: number | null };
+/** Relevé Wi-Fi (Android) */
+export type WifiSample = { at: number; rssi: number; link: number; freq: number; bssid: string | null; ssid: string | null };
+
 export type IptvView = {
   srv: number; // 1 ou 2
   url: string;
@@ -68,6 +78,10 @@ export type EngineState = {
   lastSpeed: SpeedTest | null;
   nextSpeedAt: number | null;
   iptv: IptvView[]; // serveurs IPTV configurés (0, 1 ou 2)
+  wifi: (WifiSample & { ap: string; band: string }) | null; // dernier relevé Wi-Fi (Android en Wi-Fi)
+  wifiRecent: WifiSample[]; // 2 dernières minutes
+  wifiRoamsRecent: number; // changements de point d'accès sur 2 min
+  lastMark: Mark | null;
 };
 
 type Listener = (s: EngineState) => void;
@@ -88,6 +102,17 @@ class Engine {
   private prevBox: number | null = null;
   // Serveurs IPTV
   private iptv = [new IptvMonitor(this, 1), new IptvMonitor(this, 2)];
+  // Wi-Fi
+  private wifiAt = 0;
+  private wifiRecent: WifiSample[] = [];
+  private lastBssid: string | null = null;
+  private lastFreq = 0;
+  private hadWifi = false;
+  private askedLocation = false;
+  private lastMark: Mark | null = null;
+  // Box : si elle ne répond jamais à l'ouverture de connexion alors qu'internet marche, on repasse à la page web
+  private tcpFailsWhileUp = 0;
+  private tcpBroken = false;
   // Coupure en cours
   private downSince = 0;
   private downBox = false;
@@ -128,6 +153,11 @@ class Engine {
     this.downSince = 0;
     this.openCut = null;
     this.iptv.forEach((m) => m.reset());
+    this.wifiRecent = [];
+    this.lastBssid = null;
+    this.lastFreq = 0;
+    this.hadWifi = false;
+    this.lastMark = null;
     this.emit();
   }
 
@@ -154,6 +184,14 @@ class Engine {
       lastSpeed: this.day?.speeds[this.day.speeds.length - 1] ?? null,
       nextSpeedAt: this.running && every > 0 ? Math.max(Date.now(), this.lastSpeedAt + every * 60000) : null,
       iptv: this.iptv.filter((m) => m.url()).map((m) => m.view()),
+      wifi: (() => {
+        const w = this.wifiRecent[this.wifiRecent.length - 1];
+        if (!w || !this.day || Date.now() - w.at > 15000) return null;
+        return { ...w, ap: apLabel(this.day, w.bssid), band: bandOf(w.freq) };
+      })(),
+      wifiRecent: this.wifiRecent,
+      wifiRoamsRecent: (this.day?.wifiEvents ?? []).filter((e) => e.kind === 'roam' && e.at > Date.now() - 120000).length,
+      lastMark: this.lastMark,
     };
   }
 
@@ -188,6 +226,11 @@ class Engine {
     this.ticker = startTicker(() => this.tick());
     this.notify(true);
     this.emit();
+    // Android : la permission « position » donne le point d'accès Wi-Fi (box ou répéteur) auquel l'appareil est accroché
+    if (!IS_WEB && !this.askedLocation) {
+      this.askedLocation = true;
+      askScanPermission().catch(() => {});
+    }
   }
 
   async stop() {
@@ -212,12 +255,7 @@ class Engine {
       const now = Date.now();
       await this.rollDay(now);
       this.refreshBox(now);
-      const boxUrl = this.boxIp ? `http://${this.boxIp}/` : null;
-      const [cf, g, box] = await Promise.all([
-        probe(TARGETS.cloudflare),
-        probe(TARGETS.google),
-        boxUrl ? probe(boxUrl, 1500) : Promise.resolve(undefined),
-      ]);
+      const [cf, g, box] = await Promise.all([probe(TARGETS.cloudflare), probe(TARGETS.google), this.probeBox()]);
       if (!this.running) return; // arrêtée (ou données effacées) pendant la mesure
       const best = bestOf(cf, g);
       const up = best != null;
@@ -234,12 +272,129 @@ class Engine {
       if (state !== 'test') this.record(s);
       else this.prevBest = this.prevBox = null; // pas de gigue calculée à travers un test de débit
       this.maybeIptv(now);
+      this.maybeWifi(now);
       this.maybeSpeedTest(now, up);
       this.notify(false);
       this.emit();
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * Temps de réponse de la box. Android : temps d'ouverture d'une connexion (le système de la box répond, pas sa page web
+   * d'administration, qui est lente et irrégulière). Sinon (ancien module) : la page web.
+   */
+  private async probeBox(): Promise<number | null | undefined> {
+    if (!this.boxIp) return undefined;
+    if (NativeBg?.tcpPing && !this.tcpBroken) {
+      try {
+        const ms = await NativeBg.tcpPing(this.boxIp, 80, 1500);
+        if (ms != null) {
+          this.tcpFailsWhileUp = 0;
+          return Math.round(ms);
+        }
+        // Internet passe forcément par la box : s'il répond et pas la box, c'est la méthode qui ne marche pas avec cette box
+        if (this.last && this.last.state !== 'down' && ++this.tcpFailsWhileUp >= 5) this.tcpBroken = true;
+        return null;
+      } catch {}
+    }
+    return probe(`http://${this.boxIp}/`, 1500);
+  }
+
+  // ---------- Signal Wi-Fi (Android, toutes les 5 s) ----------
+  private maybeWifi(now: number) {
+    if (IS_WEB || !NativeBg || !this.day || now - this.wifiAt < WIFI_EVERY_MS) return;
+    this.wifiAt = now;
+    if (this.netType !== 'wifi') {
+      this.hadWifi = false;
+      return;
+    }
+    let w: ReturnType<NonNullable<typeof NativeBg>['wifiInfo']> = null;
+    try {
+      w = NativeBg.wifiInfo();
+    } catch {}
+    const day = this.day;
+    const events = (day.wifiEvents ??= []);
+    if (!w || w.rssi <= -127) {
+      if (this.hadWifi) events.push({ at: now, kind: 'lost' });
+      this.hadWifi = false;
+      return;
+    }
+    const s: WifiSample = { at: now, rssi: w.rssi, link: w.linkSpeed, freq: w.frequency, bssid: w.bssid, ssid: w.ssid };
+    if (s.bssid && !(day.aps ??= []).includes(s.bssid)) day.aps.push(s.bssid);
+    if (!this.hadWifi && this.lastBssid !== null) events.push({ at: now, kind: 'back', to: apLabel(day, s.bssid), rssi: s.rssi });
+    // Changement de point d'accès (box ↔ répéteur) : BSSID différent, ou à défaut changement de bande (2,4 ↔ 5 GHz)
+    const roam =
+      this.hadWifi &&
+      ((s.bssid && this.lastBssid && s.bssid !== this.lastBssid) ||
+        (!s.bssid && this.lastFreq && bandOf(this.lastFreq) !== bandOf(s.freq)));
+    if (roam) {
+      events.push({
+        at: now,
+        kind: 'roam',
+        from: s.bssid ? apLabel(day, this.lastBssid) : bandOf(this.lastFreq),
+        to: s.bssid ? apLabel(day, s.bssid) : bandOf(s.freq),
+        rssi: s.rssi,
+      });
+      this.acc.roams++;
+    }
+    this.hadWifi = true;
+    this.lastBssid = s.bssid ?? this.lastBssid;
+    this.lastFreq = s.freq;
+    const a = this.acc;
+    a.rssiSum += s.rssi;
+    a.rssiN++;
+    if (!a.rssiMin || s.rssi < a.rssiMin) a.rssiMin = s.rssi;
+    if (s.link > 0 && (!a.linkMin || s.link < a.linkMin)) a.linkMin = s.link;
+    this.wifiRecent.push(s);
+    while (this.wifiRecent.length && this.wifiRecent[0].at < now - 120000) this.wifiRecent.shift();
+  }
+
+  // ---------- « Ça vient de couper » ----------
+  /** Enregistre l'appui avec un résumé de ce qui était mesuré dans les 2 min d'avant */
+  async mark() {
+    await this.ensureDay();
+    if (!this.day) return;
+    const now = Date.now();
+    const from = now - MARK_WINDOW_MS;
+    const xs = this.recent.filter((x) => x.at >= from && x.state !== 'test');
+    const jit = (vals: (number | null | undefined)[]) => {
+      let sum = 0,
+        n = 0;
+      for (let i = 1; i < vals.length; i++) {
+        const p = vals[i - 1],
+          c = vals[i];
+        if (typeof p === 'number' && typeof c === 'number') {
+          sum += Math.abs(c - p);
+          n++;
+        }
+      }
+      return n ? Math.round(sum / n) : null;
+    };
+    const wifi = this.wifiRecent.filter((w) => w.at >= from);
+    const ev = (this.day.wifiEvents ?? []).filter((e) => e.at >= from);
+    const m: Mark = {
+      at: now,
+      downS: xs.filter((x) => x.state === 'down').length,
+      lost: xs.filter((x) => x.state !== 'down').reduce((a, x) => a + (x.cf == null ? 1 : 0) + (x.g == null ? 1 : 0), 0),
+      jitter: jit(xs.map((x) => bestOf(x.cf, x.g))),
+      boxJitter: jit(xs.map((x) => x.box)),
+      spikes: xs.filter((x) => x.spike).length,
+      boxDown: xs.filter((x) => x.box === null).length,
+      iptvFails: this.iptv.filter((i) => i.url()).map((i) => i.failsSince(from)),
+      rssiMin: wifi.length ? Math.min(...wifi.map((w) => w.rssi)) : null,
+      roam: ev.some((e) => e.kind === 'roam'),
+      wifiLost: ev.some((e) => e.kind === 'lost'),
+    };
+    (this.day.marks ??= []).push(m);
+    this.lastMark = m;
+    await saveDay(this.day);
+    this.emit();
+  }
+
+  private async ensureDay() {
+    if (!this.day) this.day = await loadDay(dayKey());
   }
 
   private refreshBox(now: number) {
@@ -360,12 +515,21 @@ class Engine {
         a.iptv2N,
         a.iptv2Lost,
         a.iptv2LatSum,
+        a.rssiSum,
+        a.rssiN,
+        a.rssiMin,
+        a.linkMin,
+        a.roams,
       ];
       // Même minute déjà partiellement remplie (redémarrage) : on additionne
       if (prev) {
         const merged = cur.map((v, i) => (v as number) + ((prev[i] as number | undefined) ?? 0)) as MinuteStat;
         merged[4] = weighted(prev[4], prev[0] - prev[1], cur[4], cur[0] - cur[1]);
         merged[5] = Math.max(prev[5], cur[5]);
+        // « pire » valeur : 0 = pas de relevé
+        const minNz = (x?: number, y?: number) => (!x ? y ?? 0 : !y ? x : Math.min(x, y));
+        merged[M.rssiMin] = minNz(prev[M.rssiMin], cur[M.rssiMin]);
+        merged[M.linkMin] = minNz(prev[M.linkMin], cur[M.linkMin]);
         this.day.minutes[this.minuteIdx] = merged;
       } else this.day.minutes[this.minuteIdx] = cur;
       saveDay(this.day);
@@ -478,6 +642,11 @@ function newAcc() {
     iptv2N: 0,
     iptv2Lost: 0,
     iptv2LatSum: 0,
+    rssiSum: 0,
+    rssiN: 0,
+    rssiMin: 0,
+    linkMin: 0,
+    roams: 0,
   };
 }
 
@@ -514,6 +683,11 @@ class IptvMonitor {
       recent: this.recent,
       openCut: this.openCut,
     };
+  }
+
+  /** Sondes sans réponse depuis `from` (pour « Ça vient de couper ») */
+  failsSince(from: number) {
+    return this.recent.filter((x) => x.at >= from && x.ms == null).length;
   }
 
   reset() {

@@ -1,5 +1,5 @@
 // Calculs des bilans (jour, plusieurs jours) et verdict en clair.
-import { IPTV_M, iptvName, M, mv, type Cut, type Day, type Settings, type SpeedTest } from './storage';
+import { IPTV_M, iptvName, M, mv, type Cut, type Day, type Mark, type Settings, type SpeedTest } from './storage';
 
 export const C = {
   bg: '#0B0F1A',
@@ -79,7 +79,34 @@ export type DaySummary = {
   reqLossPct: number | null; // % de requêtes perdues hors coupures
   // Serveurs IPTV : [serveur 1, serveur 2]
   iptv: IptvSum[];
+  // Wi-Fi (Android)
+  rssiAvg: number | null;
+  rssiMin: number | null;
+  linkMin: number | null;
+  roams: number;
+  wifiLost: number;
+  marks: Mark[];
 };
+
+/** Ce qui a été vu autour d'un appui sur « Ça vient de couper » */
+export function markCauses(m: Mark): string[] {
+  const out: string[] = [];
+  if (m.downS > 0) out.push(`internet coupé ${m.downS} s`);
+  if (m.wifiLost) out.push('Wi-Fi perdu');
+  if (m.roam) out.push('changement de point d’accès Wi-Fi');
+  if (m.boxDown > 0 && !m.downS) out.push(`box sans réponse ${m.boxDown} s`);
+  if (m.rssiMin != null && m.rssiMin <= -75) out.push(`signal Wi-Fi faible (${m.rssiMin} dBm)`);
+  m.iptvFails.forEach((f, i) => {
+    if (f > 0) out.push(`serveur IPTV${m.iptvFails.length > 1 ? ` ${i + 1}` : ''} sans réponse (${f}×)`);
+  });
+  if ((m.jitter ?? 0) >= 30) out.push(`gigue ${m.jitter} ms`);
+  if (m.spikes >= 3) out.push(`${m.spikes} pics de temps de réponse`);
+  if (m.lost > 0 && !m.downS) out.push(`${m.lost} requête${m.lost > 1 ? 's' : ''} perdue${m.lost > 1 ? 's' : ''}`);
+  return out;
+}
+
+/** Signal Wi-Fi en mots */
+export const rssiWord = (r: number) => (r >= -60 ? 'bon' : r >= -70 ? 'moyen' : 'faible');
 
 export type IptvSum = {
   srv: number;
@@ -91,6 +118,32 @@ export type IptvSum = {
   downS: number;
   longest: number;
 };
+
+function wifiStats(day: Day) {
+  let sum = 0,
+    n = 0,
+    min = 0,
+    link = 0,
+    roams = 0;
+  for (const m of day.minutes) {
+    if (!m) continue;
+    sum += mv(m, M.rssiSum);
+    n += mv(m, M.rssiN);
+    const rm = mv(m, M.rssiMin),
+      lm = mv(m, M.linkMin);
+    if (rm && (!min || rm < min)) min = rm;
+    if (lm && (!link || lm < link)) link = lm;
+    roams += mv(m, M.roams);
+  }
+  return {
+    rssiAvg: n ? Math.round(sum / n) : null,
+    rssiMin: min || null,
+    linkMin: link || null,
+    roams,
+    wifiLost: (day.wifiEvents ?? []).filter((e) => e.kind === 'lost').length,
+    marks: day.marks ?? [],
+  };
+}
 
 /** Gigue et pertes calculées sur une liste de minutes */
 export function stability(minutes: Day['minutes']) {
@@ -184,6 +237,7 @@ export function summarize(day: Day, s: Settings): DaySummary {
     underMin: s.downMin ? downs.filter((d) => d < s.downMin).length : 0,
     eveningDown: avg(evening.map((x) => x.down!)),
     ...stab,
+    ...wifiStats(day),
     iptv: stab.iptvStats.map((x, i) => {
       const cuts = (day.iptvCuts ?? []).filter((c) => (c.srv ?? 1) === i + 1);
       return {
@@ -248,7 +302,7 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
         // par elle), c'est sa page qui est lente, pas le Wi-Fi → on ne conclut rien de cette mesure.
         if (bjit > jit * 1.2)
           out.push(
-            `La box répond moins régulièrement qu’internet (gigue box ${Math.round(bjit)} ms, internet ${Math.round(jit)} ms) : c’est sa page d’administration qui est lente, cette mesure ne permet pas d’accuser le Wi-Fi.`
+            `La box répond moins régulièrement qu’internet (gigue box ${Math.round(bjit)} ms, internet ${Math.round(jit)} ms) : c’est la box qui tarde à répondre à l’appli, cette mesure ne permet pas d’accuser le Wi-Fi.`
           );
         else if (bjit >= 15 && bjit >= jit * 0.5)
           out.push(`L’instabilité existe déjà entre l’appareil et la box (gigue box ${Math.round(bjit)} ms) : c’est le Wi-Fi ou le répéteur qui est en cause.`);
@@ -286,6 +340,51 @@ export function verdict(list: DaySummary[], s: Settings, isPc: boolean): string[
   if (bad.length && good.length) out.push(`Seul le ${bad[0]} décroche : si tes chaînes passent par lui, c’est lui qui coupe l’image.`);
   else if (!bad.length && good.length)
     out.push('Si l’image coupe quand même, le fournisseur IPTV n’y est pour rien : regarde plutôt le Wi-Fi du Chromecast.');
+
+  // Wi-Fi de l'appareil (Android)
+  const wN = list.filter((d) => d.rssiAvg != null);
+  if (wN.length && !isPc) {
+    const roams = list.reduce((a, d) => a + d.roams, 0);
+    const lostW = list.reduce((a, d) => a + d.wifiLost, 0);
+    const avg = Math.round(wN.reduce((a, d) => a + d.rssiAvg! * d.measuredS, 0) / Math.max(1, wN.reduce((a, d) => a + d.measuredS, 0)));
+    const worst = Math.min(...wN.map((d) => d.rssiMin ?? 0));
+    out.push(`Signal Wi-Fi de l’appareil : ${rssiWord(avg)} (moyenne ${avg} dBm, pire ${worst} dBm).`);
+    if (roams)
+      out.push(
+        `L’appareil a changé ${roams} fois de point d’accès Wi-Fi (box ↔ répéteurs). Chaque bascule coupe la connexion quelques secondes, quelle que soit l’appli : c’est une cause classique de coupures sur un Chromecast. Remède : un nom de Wi-Fi différent pour le répéteur (le Chromecast reste sur un seul point d’accès), ou un adaptateur Ethernet.`
+      );
+    if (lostW) out.push(`Le Wi-Fi a été complètement perdu ${lostW} fois.`);
+  }
+
+  // Coupures signalées avec « Ça vient de couper »
+  const marks = list.flatMap((d) => d.marks);
+  if (marks.length) {
+    let net = 0,
+      wifi = 0,
+      iptv = 0,
+      unstable = 0,
+      nothing = 0;
+    for (const m of marks) {
+      const c = markCauses(m);
+      if (!c.length) nothing++;
+      if (m.downS > 0) net++;
+      if (m.wifiLost || m.roam || (m.rssiMin != null && m.rssiMin <= -75)) wifi++;
+      if (m.iptvFails.some((f) => f > 0)) iptv++;
+      if ((m.jitter ?? 0) >= 30 || m.spikes >= 3 || (m.lost > 0 && !m.downS)) unstable++;
+    }
+    const parts = [
+      net && `${net} pendant une coupure d’internet`,
+      wifi && `${wifi} avec un problème de Wi-Fi (bascule, perte ou signal faible)`,
+      iptv && `${iptv} avec le serveur IPTV sans réponse`,
+      unstable && `${unstable} avec une connexion instable (gigue, pics, pertes)`,
+      nothing && `${nothing} sans rien d’anormal mesuré`,
+    ].filter(Boolean);
+    out.push(`Coupures que tu as signalées : ${marks.length}. ${parts.join(' ; ')}.`);
+    if (nothing && nothing === marks.length)
+      out.push(
+        'À aucune de ces coupures la connexion n’allait mal : le problème vient plutôt de l’appareil lui-même (Chromecast surchargé, appli) ou du flux vidéo chez le fournisseur.'
+      );
+  }
 
   const allSpeeds = list.flatMap((d) => d.speeds.filter((x) => x.down != null));
   if (allSpeeds.length) {

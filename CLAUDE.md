@@ -17,8 +17,13 @@ Une question (« tu sais faire X ? ») n'est pas un feu vert : répondre et dema
 ## Repères
 - Moteur : src/engine.ts (sonde chaque seconde, minutes, coupures, tests de débit). Réseau : src/net.ts.
 - Données : src/storage.ts (AsyncStorage, une fiche par jour, minutes = tableau compact). Bilans / verdict : src/analysis.ts.
-  MinuteStat : 7 champs d'origine + 13 ajoutés le 18/11/2026 (gigue internet/box, pics, requêtes perdues, IPTV 1 et 2) → index dans `M` / `IPTV_M`,
-  lire avec `mv()` (absent = 0).
+  MinuteStat : 7 champs d'origine + 13 ajoutés le 18/11/2026 (gigue internet/box, pics, requêtes perdues, IPTV 1 et 2) + 5 le 19/11
+  (Wi-Fi : rssiSum/rssiN/rssiMin/linkMin/roams) → index dans `M` / `IPTV_M`, lire avec `mv()` (absent = 0 ; rssiMin/linkMin : 0 = pas de relevé).
+- Box (Android) : `tcpPing` natif (temps d'ouverture de connexion port 80), pas la page web d'admin (lente, irrégulière : faussait la gigue box).
+  Repli sur la page web si 5 échecs alors qu'internet répond (`tcpBroken`). Verdict : gigue box > 1,2 × gigue internet = mesure non fiable.
+- Wi-Fi (Android, toutes les 5 s, `maybeWifi`) : signal, vitesse de liaison, BSSID → `day.aps` (A, B, C…), `day.wifiEvents` (roam / lost / back).
+  BSSID = permission position + localisation activée, sinon bascule détectée seulement par changement de bande.
+- « ⚠️ Ça vient de couper » (`engine.mark`) : résumé des 2 min d'avant dans `day.marks`, causes via `markCauses` (analysis.ts).
 - Serveurs IPTV (réglages `iptvUrl` et `iptvUrl2`, réduits à l'origine par `iptvOrigin`, jamais les identifiants) : un `IptvMonitor` par serveur,
   sondé toutes les 2 s hors du tick (ne le bloque pas), compté seulement si internet répond ; ≥ 2 échecs de suite = `day.iptvCuts` (`srv: 2` pour le 2e). Sur PC + serveur http (contenu mixte) : il faut autoriser « Contenu non sécurisé » pour le site dans Chrome ;
   tant qu'aucune réponse n'est arrivée, rien n'est compté (`iptvSeenOk`) et l'écran Direct affiche l'astuce.

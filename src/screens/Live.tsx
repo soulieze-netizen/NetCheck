@@ -1,7 +1,7 @@
 // Écran « Direct » : état de la connexion à la seconde près.
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dur, fmtMbps, hhmm, pct, summarize } from '../analysis';
+import { C, cutSeconds, dur, fmtMbps, hhmm, markCauses, pct, rssiWord, summarize } from '../analysis';
 import { engine, SLOW_MS, type EngineState, type Sample } from '../engine';
 import { IS_TV, IS_WEB } from '../net';
 import { Btn, Card, H, T } from '../ui';
@@ -52,6 +52,13 @@ export function LiveScreen() {
           <Row label={`🏠 Box${st.boxIp ? ` (${st.boxIp})` : ''}`} value={IS_WEB ? 'non mesurée sur PC' : ms(s?.box)} color={msColor(s?.box)} />
           <Row label="🌐 Cloudflare" value={ms(s?.cf)} color={msColor(s?.cf)} />
           <Row label="🌐 Google" value={ms(s?.g)} color={msColor(s?.g)} />
+          {st.wifi && (
+            <Row
+              label={`📶 Wi-Fi${st.wifi.ap !== '?' ? ` · point d’accès ${st.wifi.ap}` : ''}`}
+              value={`${st.wifi.rssi} dBm · ${st.wifi.link} Mb/s · ${st.wifi.band}`}
+              color={st.wifi.rssi >= -60 ? C.ok : st.wifi.rssi >= -70 ? C.slow : C.down}
+            />
+          )}
           {st.iptv.map((v) => {
             const last = v.recent[v.recent.length - 1];
             return (
@@ -64,6 +71,12 @@ export function LiveScreen() {
             );
           })}
         </View>
+        {st.wifi && st.wifi.ap === '?' && (
+          <T muted style={{ marginTop: 6 }}>
+            Pour voir à quel point d’accès (box ou répéteur) l’appareil est accroché, autorise la position pour NetCheck et active la localisation
+            {IS_TV ? ' (Paramètres → Confidentialité → Localisation)' : ''}.
+          </T>
+        )}
         {st.iptv.some((v) => v.blocked) && (
           <T muted style={{ marginTop: 6 }}>
             Un serveur IPTV ne répond jamais depuis le PC : le navigateur bloque sans doute les serveurs en http. Dans Chrome : cadenas à gauche de
@@ -80,6 +93,7 @@ export function LiveScreen() {
         <Spark samples={st.recent} />
         <T muted>Les 2 dernières minutes, une barre par seconde (hauteur = temps de réponse).</T>
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          {st.running && <Btn label="⚠️ Ça vient de couper" kind="primary" onPress={() => engine.mark()} />}
           {st.running ? (
             <Btn label="⏹ Arrêter la surveillance" kind="danger" onPress={() => engine.stop()} />
           ) : (
@@ -87,6 +101,17 @@ export function LiveScreen() {
           )}
           <Btn label="⚡ Tester le débit" disabled={!!st.testing} onPress={() => engine.runSpeedTest()} />
         </View>
+        {st.running && !st.lastMark && (
+          <T muted style={{ marginTop: 8 }}>
+            Quand l’image coupe, appuie sur « ⚠️ Ça vient de couper » : l’appli garde ce qu’elle mesurait juste avant.
+          </T>
+        )}
+        {st.lastMark && (
+          <T style={{ marginTop: 8 }}>
+            Coupure signalée à {hhmm(st.lastMark.at)} :{' '}
+            {markCauses(st.lastMark).join(', ') || 'rien d’anormal mesuré dans les 2 min d’avant (ni internet, ni Wi-Fi, ni serveur IPTV)'}.
+          </T>
+        )}
         {IS_TV && (
           <T muted style={{ marginTop: 8 }}>
             Sur le Chromecast, la surveillance tourne toute seule en arrière-plan : tu peux retourner à ta chaîne. Pas de test de débit automatique ici
@@ -209,6 +234,22 @@ function Stability({ st }: { st: EngineState }) {
         )}
         <Row label="Pics de temps de réponse" value={String(spikes)} color={level(spikes, 2, 6)} />
         <Row label="Requêtes perdues" value={pct(lossPct)} color={level(lossPct, 0.5, 2)} />
+        {st.wifiRecent.length > 0 && (
+          <>
+            <Row
+              label="📶 Pire signal Wi-Fi"
+              value={(() => {
+                const r = Math.min(...st.wifiRecent.map((w) => w.rssi));
+                return `${r} dBm (${rssiWord(r)})`;
+              })()}
+              color={(() => {
+                const r = Math.min(...st.wifiRecent.map((w) => w.rssi));
+                return r >= -60 ? C.ok : r >= -70 ? C.slow : C.down;
+              })()}
+            />
+            <Row label="📶 Changements de point d’accès" value={String(st.wifiRoamsRecent)} color={st.wifiRoamsRecent ? C.down : C.ok} />
+          </>
+        )}
         {st.iptv
           .filter((v) => !v.blocked)
           .map((v) => {
@@ -225,7 +266,7 @@ function Stability({ st }: { st: EngineState }) {
       </View>
       {!IS_WEB && bj != null && j != null && bj > j * 1.2 && (
         <T muted style={{ marginTop: 6 }}>
-          La box répond moins régulièrement qu’internet, qui passe pourtant par elle : c’est sa page d’administration qui est lente, pas le
+          La box répond moins régulièrement qu’internet, qui passe pourtant par elle : c’est la box qui est lente à répondre à l’appli, pas le
           Wi-Fi. Cette ligne ne compte pas.
         </T>
       )}

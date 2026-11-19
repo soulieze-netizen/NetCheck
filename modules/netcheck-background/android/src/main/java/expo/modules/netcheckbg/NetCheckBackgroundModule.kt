@@ -16,7 +16,10 @@ import android.util.Log
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.net.ConnectException
 import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 class NetCheckBackgroundModule : Module() {
@@ -90,6 +93,28 @@ class NetCheckBackgroundModule : Module() {
           false
         }
       }
+    }
+
+    /**
+     * Temps (ms) pour ouvrir une connexion vers hôte:port, ou null si pas de réponse.
+     * Mesure le trajet réseau (Wi-Fi jusqu'à la box) sans dépendre de la lenteur de la page web de la box :
+     * c'est le système de la box qui répond, pas son serveur web. Un refus (port fermé) compte comme une réponse.
+     */
+    AsyncFunction("tcpPing") { host: String, port: Int, timeoutMs: Int, promise: Promise ->
+      Thread {
+        val t0 = System.nanoTime()
+        val ms: Double? = try {
+          Socket().use { s -> s.connect(InetSocketAddress(host, port), timeoutMs) }
+          (System.nanoTime() - t0) / 1e6
+        } catch (e: ConnectException) {
+          if (e.message?.contains("ECONNREFUSED") == true) (System.nanoTime() - t0) / 1e6 else null
+        } catch (_: Exception) {
+          null
+        }
+        try {
+          promise.resolve(ms)
+        } catch (_: Exception) {}
+      }.start()
     }
 
     /** Wi-Fi auquel le téléphone est connecté : force du signal, fréquence, vitesse de liaison… */

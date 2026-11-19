@@ -1,7 +1,7 @@
 // Écran « Journée » : frise minute par minute, coupures et tests de débit d'un jour.
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, minuteColor, pct, summarize } from '../analysis';
+import { C, cutSeconds, dayLabel, dur, fmtMbps, hhmm, hhmmss, markCauses, minuteColor, pct, rssiWord, summarize } from '../analysis';
 import { IS_WEB } from '../net';
 import { dayKey, listDays, loadDay, type Day } from '../storage';
 import { Btn, Card, H, T } from '../ui';
@@ -81,11 +81,59 @@ export function DayScreen() {
                 {sum.spikes > 1 ? 's' : ''} de temps de réponse · {pct(sum.reqLossPct, 2)} de requêtes perdues
               </T>
             )}
+            {sum.rssiAvg != null && (
+              <T muted>
+                📶 Wi-Fi {rssiWord(sum.rssiAvg)} : moyenne {sum.rssiAvg} dBm, pire {sum.rssiMin} dBm
+                {sum.linkMin ? ` · liaison jusqu’à ${sum.linkMin} Mb/s au pire` : ''} · {sum.roams} changement{sum.roams > 1 ? 's' : ''} de point
+                d’accès{sum.wifiLost ? ` · Wi-Fi perdu ${sum.wifiLost}×` : ''}
+              </T>
+            )}
           </>
         ) : (
           <T muted>Aucune mesure ce jour-là.</T>
         )}
       </Card>
+
+      {(day.marks ?? []).length > 0 && (
+        <Card>
+          <H>⚠️ Coupures signalées ({(day.marks ?? []).length})</H>
+          <T muted>Ce que l’appli mesurait dans les 2 min avant chaque appui sur « Ça vient de couper ».</T>
+          {[...(day.marks ?? [])].reverse().map((m) => {
+            const c = markCauses(m);
+            return (
+              <View key={m.at} style={styles.line}>
+                <Text style={styles.time}>{hhmmss(m.at)}</Text>
+                <T style={{ flex: 1, color: c.length ? C.down : C.muted }}>{c.join(', ') || 'rien d’anormal mesuré'}</T>
+              </View>
+            );
+          })}
+        </Card>
+      )}
+
+      {(day.wifiEvents ?? []).length > 0 && (
+        <Card>
+          <H>📶 Événements Wi-Fi ({(day.wifiEvents ?? []).length})</H>
+          <T muted>
+            Points d’accès vus aujourd’hui : {(day.aps ?? []).map((b, i) => `${String.fromCharCode(65 + (i % 26))} (…${b.slice(-5)})`).join(', ') || '—'}.
+            Chaque changement coupe la connexion quelques secondes.
+          </T>
+          {[...(day.wifiEvents ?? [])]
+            .reverse()
+            .slice(0, 200)
+            .map((e, i) => (
+              <View key={`${e.at}-${i}`} style={styles.line}>
+                <Text style={styles.time}>{hhmmss(e.at)}</Text>
+                <T style={{ flex: 1 }}>
+                  {e.kind === 'roam'
+                    ? `Changement de point d’accès ${e.from} → ${e.to}${e.rssi != null ? ` (${e.rssi} dBm)` : ''}`
+                    : e.kind === 'lost'
+                      ? 'Wi-Fi perdu'
+                      : `Wi-Fi revenu${e.to && e.to !== '?' ? ` (point d’accès ${e.to})` : ''}`}
+                </T>
+              </View>
+            ))}
+        </Card>
+      )}
 
       <Card>
         <H>Coupures ({day.cuts.length})</H>
