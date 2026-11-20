@@ -267,19 +267,39 @@ export async function runDiagnostic(onStep: (s: string) => void): Promise<Diagno
   // Box / internet
   const boxLoss = boxRtt.tries - boxRtt.ok;
   const netLoss = internet.tries - internet.ok;
+  // On juge la STABILITÉ sur l'écart entre le temps habituel et le pire, pas sur la moyenne :
+  // pendant ce court test, la veille Wi-Fi de l'appareil ajoute ~40-60 ms partout, sans gêner une vidéo ou un jeu.
+  const spread = (r: Rtt) => (r.worst != null && r.median != null ? r.worst - r.median : 0);
+  const netStable = internet.ok > 0 && netLoss === 0 && spread(internet) <= 100;
   if (boxRtt.ok === 0) {
     findings.push({ level: 'warn', text: `La box (${ip}) ne répond pas en http : impossible de mesurer le Wi-Fi seul.` });
   } else {
-    const bad = boxLoss > 0 || (boxRtt.median ?? 0) > 40 || (boxRtt.worst ?? 0) > 300;
+    const head = `Téléphone ↔ box : ${boxRtt.median} ms en moyenne, pire ${boxRtt.worst} ms, ${boxLoss} perte(s) sur 20.`;
+    const boxShaky = boxLoss > 0 || spread(boxRtt) > 100 || (boxRtt.worst ?? 0) > 300;
+    let level: Diagnostic['findings'][number]['level'] = 'ok';
+    let tail = ' Le Wi-Fi jusqu’à la box est stable.';
+    if (boxShaky && netStable && boxLoss <= 1) {
+      // internet passe par la box et reste régulier : c'est la box qui répond lentement à l'appli, pas le Wi-Fi
+      tail = ' Internet, qui passe par la box, reste régulier : c’est la box qui répond lentement à l’appli, pas le Wi-Fi.';
+    } else if (boxShaky) {
+      level = boxLoss > 1 || spread(boxRtt) > 250 ? 'bad' : 'warn';
+      tail = ' Le Wi-Fi entre le téléphone et la box est instable (temps de réponse irrégulier ou pertes).';
+    } else if ((boxRtt.median ?? 0) > 40) {
+      tail = ' Le Wi-Fi jusqu’à la box est stable (le temps de base vient surtout de la mise en veille du Wi-Fi de l’appareil pendant ce test).';
+    }
+    findings.push({ level, text: head + tail });
+  }
+  {
+    const shaky = netLoss > 0 || spread(internet) > 100;
+    const level: Diagnostic['findings'][number]['level'] =
+      internet.ok === 0 || netLoss > 1 || spread(internet) > 250 ? 'bad' : shaky || (internet.median ?? 999) > 150 ? 'warn' : 'ok';
     findings.push({
-      level: boxLoss > 1 || (boxRtt.median ?? 0) > 80 ? 'bad' : bad ? 'warn' : 'ok',
-      text: `Téléphone ↔ box : ${boxRtt.median} ms en moyenne, pire ${boxRtt.worst} ms, ${boxLoss} perte(s) sur 20.${bad ? ' Le Wi-Fi entre le téléphone et la box est instable.' : ' Le Wi-Fi jusqu’à la box est correct.'}`,
+      level,
+      text:
+        `Téléphone ↔ internet : ${internet.median ?? '—'} ms en moyenne, pire ${internet.worst ?? '—'} ms, ${netLoss} perte(s) sur 20.` +
+        (internet.ok === 0 ? '' : shaky ? ' Temps de réponse irrégulier : gênant pour le direct et les jeux.' : ' Stable.'),
     });
   }
-  findings.push({
-    level: netLoss > 1 || (internet.median ?? 999) > 100 ? 'bad' : netLoss > 0 || (internet.median ?? 999) > 50 ? 'warn' : 'ok',
-    text: `Téléphone ↔ internet : ${internet.median ?? '—'} ms en moyenne, pire ${internet.worst ?? '—'} ms, ${netLoss} perte(s) sur 20.`,
-  });
   if (boxRtt.ok >= 19 && (boxRtt.median ?? 0) < 30 && (netLoss > 1 || (internet.median ?? 0) > 100)) {
     findings.push({
       level: 'bad',
